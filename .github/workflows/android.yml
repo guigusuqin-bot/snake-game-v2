@@ -1,0 +1,43 @@
+name: Build Android APK (Kivy)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            zip unzip git \
+            build-essential \
+            openjdk-17-jdk \
+            libffi-dev libssl-dev zlib1g-dev \
+            libjpeg-dev libpng-dev
+
+      - name: Install Python build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install buildozer cython==0.29.36
+
+      - name: Init buildozer.spec if missing
+        run: |
+          if [ ! -f buildozer.spec ]; then
+            buildozer init
+            sed -i 's/^title = .*/title = Snake Game/' buildozer.spec
+            sed -i 's/^package.name = .*/package.name = snakegame/' buildozer.spec
+            sed -i 's/^package.domain = .*/package.domain = org.snake/' buildozer.spec
+            sed -i 's/^# (list) requirements = .*/requirements = python3,kivy/' buildozer.spec
