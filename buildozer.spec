@@ -1,5 +1,5 @@
 [app]
-title = Snake Game
+title = 静静
 package.name = snakegame
 package.domain = org.example
 
@@ -11,7 +11,7 @@ requirements = python3,kivy
 orientation = portrait
 fullscreen = 1
 
-icon.filename =
+icon.filename = icon.png
 presplash.filename =
 
 version = 0.1
