@@ -4,7 +4,7 @@ package.name = snakegame
 package.domain = org.example
 
 source.dir = .
-source.include_exts = py,mp3,png
+source.include_exts = py,mp3,png,ttf
 
 requirements = python3,kivy
 
