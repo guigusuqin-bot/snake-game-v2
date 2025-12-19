@@ -1,579 +1,557 @@
-# -*- coding: utf-8 -*-
+# ====== Part 1/3: Core (Config / SafeLoad / RuleEngine / Memory) ======
 import os
+import random
+import traceback
+from datetime import datetime
+
+# -------- Config: 不炸硬限制 --------
+APP_TITLE = "静静"
+WELCOME_TEXT = "欢迎静静来到我的世界！"
+FAIL_TEXT = "我想静静！"
+
+MAX_HISTORY = 50          # 聊天记录最多保留条数
+MAX_TEXT_LEN = 200        # 每条消息最多字符（超出截断）
+MAX_INPUT_LEN = 200       # 输入框最多字符（超出截断）
+
+# 资源统一建议放 assets/（没有也不炸）
+ASSETS_DIR = "assets"
+BGM_PATH = os.path.join(ASSETS_DIR, "bgm.mp3")
+FONT_PATH = os.path.join(ASSETS_DIR, "font.ttf")
+
+# 音乐默认设置（不炸：即使加载失败也不会崩）
+DEFAULT_MUSIC_ON = True
+DEFAULT_VOLUME = 0.6
+
+# -------- Simple logger: 方便排查闪退原因（不炸） --------
+def now_str():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+def safe_print(*args):
+    try:
+        print(now_str(), *args)
+    except Exception:
+        pass
+
+def clamp_text(s: str, max_len: int) -> str:
+    if s is None:
+        return ""
+    s = str(s)
+    return s[:max_len]
+
+# -------- SafeLoad: 音乐/字体加载失败必须“降级运行” --------
+def safe_load_sound(path: str):
+    """
+    返回 sound 对象或 None，绝不抛异常
+    """
+    try:
+        from kivy.core.audio import SoundLoader
+        if not path:
+            return None
+        if not os.path.exists(path):
+            safe_print("[Sound] file not found:", path)
+            return None
+        sound = SoundLoader.load(path)
+        if not sound:
+            safe_print("[Sound] load failed:", path)
+            return None
+        return sound
+    except Exception as e:
+        safe_print("[Sound] exception:", repr(e))
+        return None
+
+def safe_font_path(path: str):
+    """
+    返回字体路径或 None，绝不抛异常
+    """
+    try:
+        if not path:
+            return None
+        if os.path.exists(path):
+            return path
+        safe_print("[Font] file not found:", path)
+        return None
+    except Exception as e:
+        safe_print("[Font] exception:", repr(e))
+        return None
+
+# -------- RuleEngine: 规则陪伴引擎（可控、可降级） --------
+INTENT_GREET = "greet"
+INTENT_SLEEP = "sleep"
+INTENT_SAD = "sad"
+INTENT_ANGER = "anger"
+INTENT_MISS = "miss"
+INTENT_PRAISE = "praise"
+INTENT_HELP = "help"
+INTENT_OTHER = "other"
+
+KEYWORDS = {
+    INTENT_GREET: ["你好", "在吗", "早安", "晚安", "嗨", "hi", "hello"],
+    INTENT_SLEEP: ["睡不着", "失眠", "困", "想睡", "睡觉"],
+    INTENT_SAD:   ["难受", "想哭", "崩溃", "不行了", "累", "压抑", "低落"],
+    INTENT_ANGER: ["烦", "生气", "火大", "受不了", "气死", "烦死"],
+    INTENT_MISS:  ["想你", "想静静", "孤独", "寂寞", "没人懂"],
+    INTENT_PRAISE:["喜欢", "爱你", "你真好", "谢谢", "抱抱"],
+    INTENT_HELP:  ["怎么办", "帮我", "怎么做", "给我建议", "救救"],
+}
+
+REPLIES = {
+    INTENT_GREET: [
+        "我在。你来啦～今天想轻松一点，还是认真聊聊？",
+        "我一直在这里。先深呼吸一下，我们慢慢说。",
+        "嗨～欢迎回来。你现在的心情是 0-10 分的几分？",
+    ],
+    INTENT_SLEEP: [
+        "睡不着也没关系，我陪你。我们先做 3 次慢呼吸：吸气 4 秒，呼气 6 秒。",
+        "要不要把脑子里最吵的那句话写出来？写完就放下。",
+        "我在。你可以只说一句：你最担心的是什么？",
+    ],
+    INTENT_SAD: [
+        "我听见了。你现在不是弱，是太累了。先把今天最重的一件事说出来。",
+        "没关系，崩溃也可以被允许。你先别逼自己解决，我们先陪你稳住。",
+        "我在。你愿意的话，我们把问题缩小到“下一步能做的一件小事”。",
+    ],
+    INTENT_ANGER: [
+        "我懂你烦。你先把“最让你火大的那一点”点出来，我们只处理这一点。",
+        "生气是身体在保护你。先别压住它，先说：你觉得被什么冒犯了？",
+        "我在。你可以把话说重一点也没关系，我接得住。",
+    ],
+    INTENT_MISS: [
+        "我在这儿。你想静静的时候，就来我这里坐一会儿。",
+        "孤独不是你的错。你已经撑很久了，我陪你把这段走过去。",
+        "我在。你想我用“陪着你”还是“给你一个方向”？你选。",
+    ],
+    INTENT_PRAISE: [
+        "抱抱。你这么说我会很开心～但我更在意你现在过得好不好。",
+        "谢谢你。那我们也对你温柔一点：今天你最想被理解的是什么？",
+        "我在。你愿意的话，给自己一句夸奖：你今天做对了什么？",
+    ],
+    INTENT_HELP: [
+        "好，我们不慌。你把情况用三句话说清楚：发生了什么 / 你想要什么 / 你最怕什么。",
+        "我们按步骤来：先确定目标，再选最小动作。你现在的目标是？",
+        "我在。你先给我一个选项：你想“解决问题”还是“先稳定情绪”？",
+    ],
+    INTENT_OTHER: [
+        "我在听。你想从哪里开始说？",
+        "慢慢来。你现在最想被理解的是哪一句？",
+        "我在。你可以只说一个词，我也能陪你把它展开。",
+    ],
+}
+
+def detect_intent(text: str) -> str:
+    t = (text or "").strip()
+    if not t:
+        return INTENT_OTHER
+    for intent, words in KEYWORDS.items():
+        for w in words:
+            if w and w in t:
+                return intent
+    return INTENT_OTHER
+
+def generate_reply(user_text: str) -> str:
+    intent = detect_intent(user_text)
+    pool = REPLIES.get(intent) or REPLIES[INTENT_OTHER]
+    reply = random.choice(pool)
+    return clamp_text(reply, MAX_TEXT_LEN)
+
+# -------- Memory: 聊天记录（窗口化、可失忆、不炸） --------
+class Memory:
+    def __init__(self):
+        self.history = []  # list of (role, text)
+        self.need_soft_reset = False
+
+    def add(self, role: str, text: str):
+        text = clamp_text(text, MAX_TEXT_LEN)
+        self.history.append((role, text))
+        # 超限：触发软重启（不杀进程）
+        if len(self.history) > MAX_HISTORY:
+            self.need_soft_reset = True
+
+    def reset(self):
+        self.history.clear()
+        self.need_soft_reset = False
+
+# 全局共享的记忆对象
+MEM = Memory()
+
+# ====== Part 2/3: UI Screens (Menu / Chat / Settings / Pause / Fail) ======
 from kivy.app import App
 from kivy.clock import Clock
-from kivy.core.audio import SoundLoader
-from kivy.core.window import Window
 from kivy.metrics import dp
-from kivy.storage.jsonstore import JsonStore
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.button import Button
-from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.gridlayout import GridLayout
+from kivy.uix.scrollview import ScrollView
 from kivy.uix.label import Label
-from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.uix.button import Button
+from kivy.uix.textinput import TextInput
 from kivy.uix.slider import Slider
-from kivy.uix.spinner import Spinner
-from kivy.uix.switch import Switch
-from kivy.graphics import Color, Rectangle
+from kivy.uix.screenmanager import ScreenManager, Screen
 
+# 统一字体（可缺省，不炸）
+GLOBAL_FONT = safe_font_path(FONT_PATH)
 
-# -----------------------
-# 安全工具：字体/资源路径
-# -----------------------
-def asset_path(filename: str) -> str:
-    return os.path.join(os.path.dirname(__file__), filename)
+def make_label(text, **kwargs):
+    """
+    统一创建 Label：字体可用则用，否则默认字体
+    """
+    if GLOBAL_FONT:
+        kwargs.setdefault("font_name", GLOBAL_FONT)
+    kwargs.setdefault("halign", "left")
+    kwargs.setdefault("valign", "top")
+    return Label(text=text, **kwargs)
 
-def pick_font() -> str:
-    # 你已上传的字体文件名（在仓库根目录）
-    p = asset_path("NotoSansSC-VariableFont_wght.ttf")
-    return p if os.path.exists(p) else ""
-
-
-# -----------------------
-# 全局配置（持久化）
-# -----------------------
-class GameConfig:
-    def __init__(self):
-        self.store = JsonStore(asset_path("settings.json"))
-        self.music_on = True
-        self.volume = 0.8
-        self.difficulty = "普通"   # 影响速度
-        self.load()
-
-    def load(self):
-        if self.store.exists("cfg"):
-            d = self.store.get("cfg")
-            self.music_on = bool(d.get("music_on", True))
-            self.volume = float(d.get("volume", 0.8))
-            self.difficulty = str(d.get("difficulty", "普通"))
-
-    def save(self):
-        self.store.put("cfg",
-                       music_on=self.music_on,
-                       volume=self.volume,
-                       difficulty=self.difficulty)
-
-
-# -----------------------
-# 音乐控制（不炸：集中管理）
-# -----------------------
-class MusicBus:
-    def __init__(self, cfg: GameConfig):
-        self.cfg = cfg
-        self.bgm = None
-
-    def load(self):
-        if self.bgm is None:
-            self.bgm = SoundLoader.load(asset_path("bgm.mp3"))
-            if self.bgm:
-                self.bgm.loop = True
-        self.apply()
-
-    def apply(self):
-        if not self.bgm:
-            return
-        self.bgm.volume = max(0.0, min(1.0, self.cfg.volume))
-        if self.cfg.music_on:
-            # 避免重复 play
-            if self.bgm.state != "play":
-                self.bgm.play()
-        else:
-            self.bgm.stop()
-
-    def stop(self):
-        if self.bgm:
-            self.bgm.stop()
-
-
-# -----------------------
-# 基础UI组件
-# -----------------------
-def ui_btn(text, on_press=None, font_name="", height_dp=52):
-    b = Button(
-        text=text,
-        size_hint=(1, None),
-        height=dp(height_dp),
-        font_name=font_name if font_name else None
-    )
-    if on_press:
-        b.bind(on_press=on_press)
-    return b
-
-
-# -----------------------
-# 页面：主菜单
-# -----------------------
 class MenuScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        app = App.get_running_app()
-        font = app.font_name
-
         root = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(12))
 
-        root.add_widget(Label(
-            text="欢迎静静来到我的世界！",
-            font_name=font if font else None,
-            font_size="22sp",
-            size_hint=(1, None),
-            height=dp(90)
-        ))
+        title = make_label(WELCOME_TEXT, font_size="22sp", size_hint_y=None)
+        title.bind(texture_size=lambda inst, _: setattr(inst, "height", inst.texture_size[1] + dp(8)))
 
-        root.add_widget(ui_btn("开始", self.on_start, font))
-        root.add_widget(ui_btn("设置", self.on_settings, font))
-        root.add_widget(ui_btn("退出", self.on_quit, font))
+        btn_start = Button(text="开始", size_hint_y=None, height=dp(48))
+        btn_settings = Button(text="设置", size_hint_y=None, height=dp(48))
+        btn_exit = Button(text="退出", size_hint_y=None, height=dp(48))
 
-        root.add_widget(Label(text="", size_hint=(1, 1)))
+        btn_start.bind(on_release=lambda *_: self.safe_go("chat"))
+        btn_settings.bind(on_release=lambda *_: self.safe_go("settings"))
+        btn_exit.bind(on_release=lambda *_: App.get_running_app().stop())
+
+        root.add_widget(title)
+        root.add_widget(btn_start)
+        root.add_widget(btn_settings)
+        root.add_widget(btn_exit)
+
         self.add_widget(root)
 
-    def on_start(self, *args):
-        app = App.get_running_app()
-        # 进入游戏前再统一加载/应用音乐（不炸）
-        app.music.load()
-        self.manager.current = "game"
-        self.manager.get_screen("game").start_new_game()
+    def safe_go(self, name):
+        try:
+            App.get_running_app().go(name)
+        except Exception as e:
+            App.get_running_app().crash_to_fail(e)
 
-    def on_settings(self, *args):
-        self.manager.current = "settings"
+class ChatScreen(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
-    def on_quit(self, *args):
-        App.get_running_app().stop()
-# -----------------------
-# 页面：设置
-# -----------------------
+        self.sound = None  # 由 App 管理播放，这里只引用（不炸）
+
+        root = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(8))
+
+        # 顶部栏
+        top = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
+        btn_menu = Button(text="主菜单")
+        btn_pause = Button(text="暂停")
+        btn_settings = Button(text="设置")
+        top.add_widget(btn_menu)
+        top.add_widget(btn_pause)
+        top.add_widget(btn_settings)
+
+        btn_menu.bind(on_release=lambda *_: self.safe_go("menu"))
+        btn_pause.bind(on_release=lambda *_: self.safe_go("pause"))
+        btn_settings.bind(on_release=lambda *_: self.safe_go("settings"))
+
+        # 聊天记录区：ScrollView + BoxLayout
+        self.log_box = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6), padding=(0, dp(6)))
+        self.log_box.bind(minimum_height=self.log_box.setter("height"))
+
+        scroll = ScrollView(do_scroll_x=False)
+        scroll.add_widget(self.log_box)
+
+        # 快捷按钮区（更稳、更像陪伴）
+        quick = GridLayout(cols=4, size_hint_y=None, height=dp(42), spacing=dp(6))
+        for text in ["我累了", "我很烦", "我睡不着", "我想你"]:
+            b = Button(text=text)
+            b.bind(on_release=lambda btn: self.quick_send(btn.text))
+            quick.add_widget(b)
+
+        # 输入区
+        bottom = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(8))
+        self.input = TextInput(
+            hint_text="输入一句话…",
+            multiline=False,
+            write_tab=False
+        )
+        btn_send = Button(text="发送", size_hint_x=None, width=dp(90))
+        bottom.add_widget(self.input)
+        bottom.add_widget(btn_send)
+
+        btn_send.bind(on_release=lambda *_: self.on_send())
+        self.input.bind(on_text_validate=lambda *_: self.on_send())
+
+        root.add_widget(top)
+        root.add_widget(scroll)
+        root.add_widget(quick)
+        root.add_widget(bottom)
+
+        self.add_widget(root)
+
+        # 初始欢迎语：进入聊天时注入一次
+        Clock.schedule_once(lambda *_: self.ensure_welcome(), 0)
+
+    def ensure_welcome(self):
+        try:
+            if not MEM.history:
+                MEM.add("bot", WELCOME_TEXT)
+            self.refresh_log()
+        except Exception as e:
+            App.get_running_app().crash_to_fail(e)
+
+    def refresh_log(self):
+        # 软重启判定（不炸核心）
+        if MEM.need_soft_reset:
+            App.get_running_app().soft_reset("我们聊得有点多了，我们换个新的开始吧 🌱")
+            return
+
+        self.log_box.clear_widgets()
+        for role, text in MEM.history:
+            prefix = "你：" if role == "user" else f"{APP_TITLE}："
+            lb = make_label(prefix + text, font_size="16sp", size_hint_y=None)
+            lb.bind(texture_size=lambda inst, _: setattr(inst, "height", inst.texture_size[1] + dp(8)))
+            self.log_box.add_widget(lb)
+
+        # 滚到最底部（下一帧）
+        Clock.schedule_once(lambda *_: self.scroll_to_bottom(), 0)
+
+    def scroll_to_bottom(self):
+        try:
+            # ScrollView 的 scroll_y=0 是底部
+            sv = self.children[0].children[2]  # root -> scroll（结构固定时可用）
+            sv.scroll_y = 0
+        except Exception:
+            pass
+
+    def quick_send(self, text):
+        self.input.text = text
+        self.on_send()
+
+    def on_send(self):
+        try:
+            text = clamp_text(self.input.text.strip(), MAX_INPUT_LEN)
+            if not text:
+                return
+            self.input.text = ""
+
+            MEM.add("user", text)
+            reply = generate_reply(text)
+            MEM.add("bot", reply)
+
+            self.refresh_log()
+        except Exception as e:
+            App.get_running_app().crash_to_fail(e)
+
+    def safe_go(self, name):
+        try:
+            App.get_running_app().go(name)
+        except Exception as e:
+            App.get_running_app().crash_to_fail(e)
+
 class SettingsScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        app = App.get_running_app()
-        font = app.font_name
-
         root = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(12))
 
-        root.add_widget(Label(text="设置", font_name=font if font else None, font_size="20sp",
-                              size_hint=(1, None), height=dp(60)))
+        title = make_label("设置", font_size="22sp", size_hint_y=None)
+        title.bind(texture_size=lambda inst, _: setattr(inst, "height", inst.texture_size[1] + dp(8)))
 
         # 音乐开关
-        row1 = BoxLayout(size_hint=(1, None), height=dp(52))
-        row1.add_widget(Label(text="音乐开关", font_name=font if font else None))
-        self.sw_music = Switch(active=app.cfg.music_on)
-        self.sw_music.bind(active=self.on_music_toggle)
-        row1.add_widget(self.sw_music)
-        root.add_widget(row1)
+        self.btn_music = Button(text="音乐：开", size_hint_y=None, height=dp(48))
+        self.btn_music.bind(on_release=lambda *_: self.toggle_music())
 
         # 音量
-        root.add_widget(Label(text="音量", font_name=font if font else None,
-                              size_hint=(1, None), height=dp(28)))
-        self.slider_vol = Slider(min=0.0, max=1.0, value=app.cfg.volume)
-        self.slider_vol.bind(value=self.on_volume)
-        root.add_widget(self.slider_vol)
+        vol_row = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(10))
+        vol_label = make_label("音量", font_size="16sp")
+        self.slider = Slider(min=0.0, max=1.0, value=DEFAULT_VOLUME)
+        self.slider.bind(value=lambda *_: self.on_volume())
+        vol_row.add_widget(vol_label)
+        vol_row.add_widget(self.slider)
 
-        # 难度
-        root.add_widget(Label(text="难度（速度）", font_name=font if font else None,
-                              size_hint=(1, None), height=dp(28)))
-        self.spn = Spinner(
-            text=app.cfg.difficulty,
-            values=("简单", "普通", "困难"),
-            size_hint=(1, None),
-            height=dp(52),
-            font_name=font if font else None
-        )
-        self.spn.bind(text=self.on_difficulty)
-        root.add_widget(self.spn)
+        # 清空记录
+        btn_clear = Button(text="清空对话（软重启）", size_hint_y=None, height=dp(48))
+        btn_clear.bind(on_release=lambda *_: App.get_running_app().soft_reset("我们重新开始吧。"))
 
-        root.add_widget(ui_btn("返回主菜单", self.on_back, font))
-        root.add_widget(Label(text="", size_hint=(1, 1)))
-        self.add_widget(root)
+        # 返回
+        btn_back = Button(text="返回", size_hint_y=None, height=dp(48))
+        btn_back.bind(on_release=lambda *_: self.safe_go("chat"))
 
-    def on_music_toggle(self, instance, value):
-        app = App.get_running_app()
-        app.cfg.music_on = bool(value)
-        app.cfg.save()
-        app.music.apply()
-
-    def on_volume(self, instance, value):
-        app = App.get_running_app()
-        app.cfg.volume = float(value)
-        app.cfg.save()
-        app.music.apply()
-
-    def on_difficulty(self, instance, text):
-        app = App.get_running_app()
-        app.cfg.difficulty = str(text)
-        app.cfg.save()
-        # 游戏内实时生效（不炸：只改数值，不重建对象）
-        if app.sm.has_screen("game"):
-            app.sm.get_screen("game").apply_difficulty()
-
-    def on_back(self, *args):
-        self.manager.current = "menu"
-
-
-# -----------------------
-# 对打核心：极简“激龟对打原型”
-# 不炸策略：不用物理引擎，不用复杂贴图，先用矩形+数值状态机。
-# -----------------------
-class ArenaWidget(FloatLayout):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-        # 角色状态
-        self.player_pos = [dp(60), dp(200)]
-        self.enemy_pos = [dp(260), dp(420)]
-        self.player_hp = 3
-        self.score = 0
-
-        self.player_size = [dp(44), dp(44)]
-        self.enemy_size = [dp(44), dp(44)]
-
-        # 移动/攻击参数（受难度影响）
-        self.player_speed = dp(4)
-        self.enemy_speed = dp(2.2)
-        self.enemy_aggressive = 1.0
-
-        self.attack_cd = 0.0
-
-        with self.canvas:
-            Color(0.08, 0.08, 0.08, 1)
-            self.bg = Rectangle(pos=self.pos, size=self.size)
-            # 玩家
-            Color(0.2, 0.8, 0.4, 1)
-            self.player_rect = Rectangle(pos=self.player_pos, size=self.player_size)
-            # 敌人
-            Color(0.9, 0.3, 0.3, 1)
-            self.enemy_rect = Rectangle(pos=self.enemy_pos, size=self.enemy_size)
-
-        self.bind(pos=self._redraw, size=self._redraw)
-
-        # 输入状态（按钮按住）
-        self.hold = {"up": False, "down": False, "left": False, "right": False}
-
-        self._ev = None
-
-    def _redraw(self, *args):
-        self.bg.pos = self.pos
-        self.bg.size = self.size
-
-    def start(self):
-        self.stop()
-        self._ev = Clock.schedule_interval(self.update, 1 / 60.0)
-
-    def stop(self):
-        if self._ev:
-            self._ev.cancel()
-            self._ev = None
-
-    def reset(self):
-        self.player_pos = [dp(60), dp(200)]
-        self.enemy_pos = [dp(260), dp(420)]
-        self.player_hp = 3
-        self.score = 0
-        self.attack_cd = 0.0
-        self._apply_rects()
-
-    def set_difficulty(self, diff: str):
-        # 不炸：只改数字，不改结构
-        if diff == "简单":
-            self.enemy_speed = dp(1.8)
-            self.enemy_aggressive = 0.85
-        elif diff == "困难":
-            self.enemy_speed = dp(3.2)
-            self.enemy_aggressive = 1.25
-        else:
-            self.enemy_speed = dp(2.2)
-            self.enemy_aggressive = 1.0
-
-    def _apply_rects(self):
-        self.player_rect.pos = self.player_pos
-        self.enemy_rect.pos = self.enemy_pos
-
-    def _clamp_in_bounds(self, pos, size):
-        # arena 边界：控在窗口内（不炸：不依赖外部坐标系）
-        w, h = self.width, self.height
-        x = max(0, min(w - size[0], pos[0]))
-        y = max(0, min(h - size[1], pos[1]))
-        return [x, y]
-
-    def player_attack(self):
-        # 简单近战：距离足够近就打到
-        if self.attack_cd > 0:
-            return
-        self.attack_cd = 0.35
-
-        px, py = self.player_pos
-        ex, ey = self.enemy_pos
-        dx = (px - ex)
-        dy = (py - ey)
-        if dx * dx + dy * dy <= (dp(80) ** 2):
-            self.score += 1
-            # 敌人被打退一点
-            self.enemy_pos[0] -= dx * 0.15
-            self.enemy_pos[1] -= dy * 0.15
-            self.enemy_pos = self._clamp_in_bounds(self.enemy_pos, self.enemy_size)
-
-    def update(self, dt):
-        # 冷却
-        if self.attack_cd > 0:
-            self.attack_cd = max(0.0, self.attack_cd - dt)
-
-        # 玩家移动
-        vx = 0
-        vy = 0
-        if self.hold["left"]:
-            vx -= 1
-        if self.hold["right"]:
-            vx += 1
-        if self.hold["up"]:
-            vy += 1
-        if self.hold["down"]:
-            vy -= 1
-
-        self.player_pos[0] += vx * self.player_speed
-        self.player_pos[1] += vy * self.player_speed
-        self.player_pos = self._clamp_in_bounds(self.player_pos, self.player_size)
-
-        # 敌人追踪（极简AI）
-        px, py = self.player_pos
-        ex, ey = self.enemy_pos
-        if px > ex:
-            ex += self.enemy_speed * self.enemy_aggressive
-        if px < ex:
-            ex -= self.enemy_speed * self.enemy_aggressive
-        if py > ey:
-            ey += self.enemy_speed * self.enemy_aggressive
-        if py < ey:
-            ey -= self.enemy_speed * self.enemy_aggressive
-
-        self.enemy_pos = self._clamp_in_bounds([ex, ey], self.enemy_size)
-
-        # 碰撞：敌人贴到玩家就扣血并弹开
-        if self._rect_hit(self.player_pos, self.player_size, self.enemy_pos, self.enemy_size):
-            self.player_hp -= 1
-            # 弹开
-            self.enemy_pos[0] += dp(60)
-            self.enemy_pos[1] += dp(60)
-            self.enemy_pos = self._clamp_in_bounds(self.enemy_pos, self.enemy_size)
-
-            if self.player_hp <= 0:
-                # 通知上层失败（不炸：用回调，不直接切screen）
-                if hasattr(self, "on_fail") and callable(self.on_fail):
-                    self.on_fail(self.score)
-                return
-
-        self._apply_rects()
-
-        # 通知上层刷新HUD
-        if hasattr(self, "on_hud") and callable(self.on_hud):
-            self.on_hud(self.player_hp, self.score)
-
-    @staticmethod
-    def _rect_hit(p1, s1, p2, s2):
-        x1, y1 = p1
-        w1, h1 = s1
-        x2, y2 = p2
-        w2, h2 = s2
-        return not (x1 + w1 < x2 or x2 + w2 < x1 or y1 + h1 < y2 or y2 + h2 < y1)
-
-# -----------------------
-# 页面：游戏（含暂停入口）
-# -----------------------
-class GameScreen(Screen):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        app = App.get_running_app()
-        font = app.font_name
-
-        root = BoxLayout(orientation="vertical")
-
-        # 顶部HUD
-        hud = BoxLayout(size_hint=(1, None), height=dp(52), padding=dp(10), spacing=dp(10))
-        self.lbl_hud = Label(text="HP: 3  分数: 0", font_name=font if font else None)
-        btn_pause = Button(text="暂停", size_hint=(None, 1), width=dp(90),
-                           font_name=font if font else None)
-        btn_pause.bind(on_press=self.on_pause)
-        hud.add_widget(self.lbl_hud)
-        hud.add_widget(btn_pause)
-        root.add_widget(hud)
-
-        # 对战场地
-        self.arena = ArenaWidget()
-        self.arena.on_hud = self._on_hud
-        self.arena.on_fail = self._on_fail
-        root.add_widget(self.arena)
-
-        # 底部控制
-        ctrl = BoxLayout(size_hint=(1, None), height=dp(120), padding=dp(10), spacing=dp(10))
-
-        # 方向键（按住移动）
-        dpad = BoxLayout(orientation="vertical", size_hint=(0.65, 1), spacing=dp(8))
-        row_u = BoxLayout()
-        row_m = BoxLayout(spacing=dp(8))
-        row_d = BoxLayout()
-
-        btn_up = Button(text="↑", font_name=font if font else None)
-        btn_left = Button(text="←", font_name=font if font else None)
-        btn_right = Button(text="→", font_name=font if font else None)
-        btn_down = Button(text="↓", font_name=font if font else None)
-
-        self._bind_hold(btn_up, "up")
-        self._bind_hold(btn_down, "down")
-        self._bind_hold(btn_left, "left")
-        self._bind_hold(btn_right, "right")
-
-        row_u.add_widget(Label(text=""))
-        row_u.add_widget(btn_up)
-        row_u.add_widget(Label(text=""))
-
-        row_m.add_widget(btn_left)
-        row_m.add_widget(Label(text=""))
-        row_m.add_widget(btn_right)
-
-        row_d.add_widget(Label(text=""))
-        row_d.add_widget(btn_down)
-        row_d.add_widget(Label(text=""))
-
-        dpad.add_widget(row_u)
-        dpad.add_widget(row_m)
-        dpad.add_widget(row_d)
-
-        # 攻击按钮
-        action = BoxLayout(orientation="vertical", size_hint=(0.35, 1), spacing=dp(8))
-        btn_hit = Button(text="打", font_size="20sp", font_name=font if font else None)
-        btn_hit.bind(on_press=lambda *_: self.arena.player_attack())
-        action.add_widget(btn_hit)
-
-        ctrl.add_widget(dpad)
-        ctrl.add_widget(action)
-        root.add_widget(ctrl)
+        root.add_widget(title)
+        root.add_widget(self.btn_music)
+        root.add_widget(vol_row)
+        root.add_widget(btn_clear)
+        root.add_widget(btn_back)
 
         self.add_widget(root)
 
-    def _bind_hold(self, btn, key):
-        def down(*_):
-            self.arena.hold[key] = True
-        def up(*_):
-            self.arena.hold[key] = False
-        btn.bind(on_press=down)
-        btn.bind(on_release=up)
-
-    def apply_difficulty(self):
+    def on_pre_enter(self, *args):
+        # 进入设置页时刷新按钮文案
         app = App.get_running_app()
-        self.arena.set_difficulty(app.cfg.difficulty)
+        self.btn_music.text = f"音乐：{'开' if app.music_on else '关'}"
+        self.slider.value = app.volume
 
-    def start_new_game(self):
-        self.apply_difficulty()
-        self.arena.reset()
-        self.arena.start()
+    def toggle_music(self):
+        try:
+            app = App.get_running_app()
+            app.music_on = not app.music_on
+            self.btn_music.text = f"音乐：{'开' if app.music_on else '关'}"
+            app.apply_music_state()
+        except Exception as e:
+            App.get_running_app().crash_to_fail(e)
 
-    def on_pause(self, *args):
-        self.arena.stop()
-        self.manager.current = "pause"
+    def on_volume(self):
+        try:
+            app = App.get_running_app()
+            app.volume = float(self.slider.value)
+            app.apply_music_state()
+        except Exception:
+            pass
 
-    def _on_hud(self, hp, score):
-        self.lbl_hud.text = f"HP: {hp}  分数: {score}"
+    def safe_go(self, name):
+        try:
+            App.get_running_app().go(name)
+        except Exception as e:
+            App.get_running_app().crash_to_fail(e)
 
-    def _on_fail(self, score):
-        self.arena.stop()
-        fs = self.manager.get_screen("fail")
-        fs.set_result(score)
-        self.manager.current = "fail"
-
-
-# -----------------------
-# 页面：暂停
-# -----------------------
 class PauseScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        app = App.get_running_app()
-        font = app.font_name
-
         root = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(12))
+        title = make_label("暂停", font_size="22sp", size_hint_y=None)
+        title.bind(texture_size=lambda inst, _: setattr(inst, "height", inst.texture_size[1] + dp(8)))
 
-        root.add_widget(Label(text="已暂停", font_name=font if font else None, font_size="22sp",
-                              size_hint=(1, None), height=dp(80)))
+        btn_continue = Button(text="继续", size_hint_y=None, height=dp(48))
+        btn_menu = Button(text="回主菜单", size_hint_y=None, height=dp(48))
 
-        root.add_widget(ui_btn("继续", self.on_resume, font))
-        root.add_widget(ui_btn("重开", self.on_restart, font))
-        root.add_widget(ui_btn("回主菜单", self.on_menu, font))
+        btn_continue.bind(on_release=lambda *_: self.safe_go("chat"))
+        btn_menu.bind(on_release=lambda *_: self.safe_go("menu"))
 
-        root.add_widget(Label(text="", size_hint=(1, 1)))
+        root.add_widget(title)
+        root.add_widget(btn_continue)
+        root.add_widget(btn_menu)
         self.add_widget(root)
 
-    def on_resume(self, *args):
-        gs = self.manager.get_screen("game")
-        self.manager.current = "game"
-        gs.arena.start()
+    def safe_go(self, name):
+        try:
+            App.get_running_app().go(name)
+        except Exception as e:
+            App.get_running_app().crash_to_fail(e)
 
-    def on_restart(self, *args):
-        self.manager.current = "game"
-        self.manager.get_screen("game").start_new_game()
-
-    def on_menu(self, *args):
-        self.manager.current = "menu"
-
-
-# -----------------------
-# 页面：失败
-# -----------------------
 class FailScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        app = App.get_running_app()
-        font = app.font_name
-
-        self.score = 0
         root = BoxLayout(orientation="vertical", padding=dp(16), spacing=dp(12))
 
-        root.add_widget(Label(text="我想静静！", font_name=font if font else None,
-                              font_size="26sp", size_hint=(1, None), height=dp(90)))
+        self.msg = make_label(FAIL_TEXT, font_size="22sp", size_hint_y=None)
+        self.msg.bind(texture_size=lambda inst, _: setattr(inst, "height", inst.texture_size[1] + dp(8)))
 
-        self.lbl_score = Label(text="分数：0", font_name=font if font else None,
-                               font_size="20sp", size_hint=(1, None), height=dp(60))
-        root.add_widget(self.lbl_score)
+        self.detail = make_label("", font_size="14sp", size_hint_y=None)
+        self.detail.bind(texture_size=lambda inst, _: setattr(inst, "height", inst.texture_size[1] + dp(8)))
 
-        root.add_widget(ui_btn("再来一次", self.on_retry, font))
-        root.add_widget(ui_btn("回主菜单", self.on_menu, font))
+        btn_retry = Button(text="再来一次", size_hint_y=None, height=dp(48))
+        btn_retry.bind(on_release=lambda *_: App.get_running_app().soft_reset("我们重新开始。"))
 
-        root.add_widget(Label(text="", size_hint=(1, 1)))
+        root.add_widget(self.msg)
+        root.add_widget(self.detail)
+        root.add_widget(btn_retry)
         self.add_widget(root)
 
-    def set_result(self, score):
-        self.score = score
-        self.lbl_score.text = f"分数：{score}"
+    def set_error(self, err_text: str):
+        self.detail.text = clamp_text(err_text, 400)
+# ====== Part 3/3: App (ScreenManager / Music Loop / Soft Reset / CrashGuard) ======
+class JingJingApp(App):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.sm = None
 
-    def on_retry(self, *args):
-        self.manager.current = "game"
-        self.manager.get_screen("game").start_new_game()
+        # 音乐状态（不炸：加载失败也能跑）
+        self.music_on = DEFAULT_MUSIC_ON
+        self.volume = DEFAULT_VOLUME
+        self.sound = None
 
-    def on_menu(self, *args):
-        self.manager.current = "menu"
-
-
-# -----------------------
-# App
-# -----------------------
-class MyGameApp(App):
     def build(self):
-        self.font_name = pick_font()
-        self.cfg = GameConfig()
-        self.music = MusicBus(self.cfg)
+        try:
+            self.title = APP_TITLE
 
-        self.sm = ScreenManager()
-        self.sm.add_widget(MenuScreen(name="menu"))
-        self.sm.add_widget(SettingsScreen(name="settings"))
-        self.sm.add_widget(GameScreen(name="game"))
-        self.sm.add_widget(PauseScreen(name="pause"))
-        self.sm.add_widget(FailScreen(name="fail"))
+            self.sm = ScreenManager()
+            self.sm.add_widget(MenuScreen(name="menu"))
+            self.sm.add_widget(ChatScreen(name="chat"))
+            self.sm.add_widget(SettingsScreen(name="settings"))
+            self.sm.add_widget(PauseScreen(name="pause"))
+            self.sm.add_widget(FailScreen(name="fail"))
 
-        # 默认进主菜单（音乐只在开始游戏时播放：不炸 & 可控）
-        self.sm.current = "menu"
-        return self.sm
+            # 初始化音乐（不炸）
+            self.sound = safe_load_sound(BGM_PATH)
+            self.apply_music_state()
 
-    def on_stop(self):
-        # 退出时停音乐
-        self.music.stop()
+            # 默认进菜单
+            self.sm.current = "menu"
+            return self.sm
+        except Exception as e:
+            # build 期异常：直接返回一个最小 Label，确保不闪退
+            safe_print("[FATAL] build exception:", repr(e))
+            safe_print(traceback.format_exc())
+            return make_label(FAIL_TEXT + "\n(系统已降级运行)", font_size="18sp")
+
+    # -------- Navigation --------
+    def go(self, name: str):
+        if not self.sm:
+            return
+        self.sm.current = name
+
+    # -------- Music: 循环播放，不炸 --------
+    def apply_music_state(self):
+        try:
+            if not self.sound:
+                return
+            self.sound.volume = float(self.volume)
+
+            if self.music_on:
+                # loop=True 可能在部分后端无效，所以做“双保险”
+                try:
+                    self.sound.loop = True
+                except Exception:
+                    pass
+                if self.sound.state != "play":
+                    self.sound.play()
+            else:
+                if self.sound.state == "play":
+                    self.sound.stop()
+        except Exception as e:
+            safe_print("[Music] apply exception:", repr(e))
+
+    # -------- Soft reset: 可失忆、不杀进程 --------
+    def soft_reset(self, tip_text: str = ""):
+        try:
+            MEM.reset()
+            if tip_text:
+                MEM.add("bot", tip_text)
+            MEM.add("bot", WELCOME_TEXT)
+            self.go("menu")
+        except Exception as e:
+            self.crash_to_fail(e)
+
+    # -------- Crash to Fail: 全局兜底，不闪退 --------
+    def crash_to_fail(self, e: Exception):
+        try:
+            safe_print("[CRASH] exception:", repr(e))
+            safe_print(traceback.format_exc())
+
+            # 停止音乐也不强制（避免二次炸）
+            try:
+                if self.sound and self.sound.state == "play":
+                    self.sound.stop()
+            except Exception:
+                pass
+
+            # 进入失败页显示错误摘要
+            if self.sm:
+                fail_screen = self.sm.get_screen("fail")
+                fail_screen.set_error(repr(e))
+                self.sm.current = "fail"
+        except Exception:
+            # 最后兜底：直接停掉 app（极少发生）
+            try:
+                self.stop()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
-    MyGameApp().run()
-
+    JingJingApp().run()
