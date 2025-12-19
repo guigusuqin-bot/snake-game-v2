@@ -16,7 +16,7 @@ MAX_INPUT_LEN = 200       # 输入框最多字符（超出截断）
 # 资源统一建议放 assets/（没有也不炸）
 ASSETS_DIR = "assets"
 BGM_PATH = os.path.join(ASSETS_DIR, "bgm.mp3")
-FONT_PATH = os.path.join(ASSETS_DIR, "font.ttf")
+FONT_PATH = "NotoSansSC-VariableFont_wght.ttf"
 
 # 音乐默认设置（不炸：即使加载失败也不会崩）
 DEFAULT_MUSIC_ON = True
