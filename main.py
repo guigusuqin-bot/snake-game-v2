@@ -1,22 +1,24 @@
 from kivy.app import App
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.button import Button
+from kivy.core.audio import SoundLoader
 from kivy.core.window import Window
 
-# 固定竖屏比例（方便你在电脑/手机预览）
+# 方便预览（不影响手机实际运行）
 Window.size = (360, 640)
 
 class StartScreen(FloatLayout):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
-    def start_app(self, instance):
-        print("开始按钮被点击了")
-        # 这里以后接：播放声音 / 跳转界面 / 启动闹铃
-        # 现在先留钩子，不做复杂逻辑
+        # 1) 预加载音频（最稳）
+        self.sound = SoundLoader.load("bgm.mp3")
+        if self.sound:
+            self.sound.loop = False  # 先不循环；你要循环我再改
+        else:
+            print("❌ 没找到 bgm.mp3（请确认文件在仓库根目录）")
 
-class MyApp(App):
-    def build(self):
-        root = StartScreen()
-
+        # 2) 创建按钮
         start_button = Button(
             text="❤️\n开始",
             font_size=48,
@@ -26,11 +28,20 @@ class MyApp(App):
             background_color=(1, 0, 0, 1),  # 红色
             color=(1, 1, 1, 1),             # 白字
         )
+        start_button.bind(on_press=self.start_app)
+        self.add_widget(start_button)
 
-        start_button.bind(on_press=root.start_app)
-        root.add_widget(start_button)
+    def start_app(self, instance):
+        print("✅ 开始按钮被点击")
+        if self.sound:
+            self.sound.stop()   # 防止重复点击叠音
+            self.sound.play()
+            print("🔊 正在播放 bgm.mp3")
 
-        return root
+
+class MyApp(App):
+    def build(self):
+        return StartScreen()
 
 if __name__ == "__main__":
     MyApp().run()
