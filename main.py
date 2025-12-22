@@ -1,4 +1,4 @@
-# main.py  （整文件覆盖版）
+# main.py（整文件覆盖版：圆角按钮 + 中文字体兜底 + 3按钮逻辑不变）
 import os
 import re
 
@@ -13,6 +13,8 @@ from kivy.uix.button import Button
 from kivy.uix.label import Label
 from kivy.uix.scrollview import ScrollView
 
+from kivy.graphics import Color, RoundedRectangle
+
 
 def _app_dir() -> str:
     return os.path.dirname(os.path.abspath(__file__))
@@ -26,7 +28,6 @@ def _safe_listdir(path: str):
 
 
 def _sort_by_number(files, pattern: str):
-    # pattern example: r"^listen(\d+)\.mp3$"
     reg = re.compile(pattern, re.IGNORECASE)
     pairs = []
     for f in files:
@@ -52,35 +53,38 @@ class ProtonApp(App):
         resource_add_path(self.root_dir)
         resource_add_path(self.assets_dir)
 
+        # ====== 字体兜底（解决按钮中文不显示）======
+        # 你的字体文件现在在根目录：NotoSansSC-VariableFont_wght.ttf
+        # 如果你后续想放到 assets，也支持。
+        self.font = _pick_existing([
+            os.path.join(self.root_dir, "NotoSansSC-VariableFont_wght.ttf"),
+            os.path.join(self.assets_dir, "NotoSansSC-VariableFont_wght.ttf"),
+        ])
+
         # ====== 扫描资源（B：自动识别，不用你手写列表）======
         root_files = _safe_listdir(self.root_dir)
         assets_files = _safe_listdir(self.assets_dir)
 
-        # 音乐：支持放根目录 或 assets/
+        # 听歌：支持 listenN.mp3 放根目录 或 assets/
         listen_mp3_root = _sort_by_number(root_files, r"^listen(\d+)\.mp3$")
         listen_mp3_assets = _sort_by_number(assets_files, r"^listen(\d+)\.mp3$")
-        self.listen_tracks = []
 
-        # 先用 assets 的（更规范），再补根目录的
+        self.listen_tracks = []
         for f in listen_mp3_assets:
             self.listen_tracks.append(os.path.join(self.assets_dir, f))
         for f in listen_mp3_root:
             self.listen_tracks.append(os.path.join(self.root_dir, f))
 
-        # 背景图：只认 assets/ 里的 listen_bgN.png
+        # 背景图：assets/listen_bgN.png
         listen_bg_assets = _sort_by_number(assets_files, r"^listen_bg(\d+)\.png$")
         self.listen_bgs = [os.path.join(self.assets_dir, f) for f in listen_bg_assets]
 
-        # 兜底：你至少要有 1 首歌或 1 张图，否则不崩溃但会提示
         self.listen_index = -1
         self.bg_index = -1
 
-        # ====== “爱”模式的占位资源（你后续上传时按这个命名）======
-        # 背景：assets/love_bg.png
-        # 音频：love1.mp3, love2.mp3...（放根目录或 assets 都行）
+        # ====== “爱”模式资源（占位命名规则）======
         self.love_bg = _pick_existing([
             os.path.join(self.assets_dir, "love_bg.png"),
-            # 没有就兜底用第一张 listen 背景
             self.listen_bgs[0] if self.listen_bgs else "",
         ])
 
@@ -93,12 +97,13 @@ class ProtonApp(App):
             self.love_tracks.append(os.path.join(self.root_dir, f))
         self.love_index = -1
 
-        # ====== 小说模式占位资源（你后续上传时按这个命名）======
-        # 背景：assets/novel_bg.png
+        # ====== 小说模式资源（占位命名规则）======
         self.novel_bg = _pick_existing([
             os.path.join(self.assets_dir, "novel_bg.png"),
             self.listen_bgs[0] if self.listen_bgs else "",
         ])
+
+        # 你后续把 5000 字文本发我，我会替换这段
         self.novel_text = (
             "【小说占位内容】\n\n"
             "你把大约 5000 字的小说文本发我，我会替换到这里。\n\n"
@@ -129,45 +134,35 @@ class ProtonApp(App):
         self.content_area = FloatLayout(size_hint=(1, 1))
         root.add_widget(self.content_area)
 
-        # 顶部欢迎文本（你要的那句话，做成 App 内“等待/欢迎”显示）
+        # 顶部欢迎文本
         self.top_label = Label(
             text="你好，静静，我是质子 1 号 。褚少华派我来陪伴你。",
             size_hint=(1, None),
-            height=80,
+            height=90,
             pos_hint={"x": 0, "top": 1},
             font_size=20,
+            font_name=self.font if self.font else None,
         )
         root.add_widget(self.top_label)
 
         # 底部按钮区
         btn_box = BoxLayout(
             orientation="vertical",
-            spacing=16,
-            padding=24,
+            spacing=18,
+            padding=[24, 0, 24, 24],
             size_hint=(1, None),
-            height=320,
+            height=360,
             pos_hint={"x": 0, "y": 0},
         )
 
-        self.btn_listen = Button(
-            text="和褚少华一起听歌",
-            font_size=26,
-            size_hint=(1, 1),
-        )
+        # 三个圆角按钮（胶囊）
+        self.btn_listen = self._make_round_button("和褚少华一起听歌")
         self.btn_listen.bind(on_press=self.on_listen_press)
 
-        self.btn_novel = Button(
-            text="和褚少华一起看小说",
-            font_size=26,
-            size_hint=(1, 1),
-        )
+        self.btn_novel = self._make_round_button("和褚少华一起看小说")
         self.btn_novel.bind(on_press=self.on_novel_press)
 
-        self.btn_love = Button(
-            text="我爱褚少华",
-            font_size=26,
-            size_hint=(1, 1),
-        )
+        self.btn_love = self._make_round_button("我爱褚少华")
         self.btn_love.bind(on_press=self.on_love_press)
 
         btn_box.add_widget(self.btn_listen)
@@ -176,7 +171,7 @@ class ProtonApp(App):
 
         root.add_widget(btn_box)
 
-        # 小说控件（先创建但不显示）
+        # 小说控件（创建但不默认显示）
         self.novel_scroll = ScrollView(
             size_hint=(0.92, 0.55),
             pos_hint={"center_x": 0.5, "center_y": 0.62},
@@ -188,22 +183,62 @@ class ProtonApp(App):
             font_size=20,
             halign="left",
             valign="top",
+            font_name=self.font if self.font else None,
+            markup=True,
         )
         self.novel_label.bind(texture_size=self._update_novel_label_height)
         self.novel_scroll.add_widget(self.novel_label)
 
-        # 初始状态：只显示背景 + 顶部话
         self._show_home()
-
         return root
+
+    # ------------------ 圆角按钮工厂（关键） ------------------
+
+    def _make_round_button(self, text: str) -> Button:
+        btn = Button(
+            text=text,
+            font_size=24,
+            font_name=self.font if self.font else None,
+            size_hint=(1, None),
+            height=96,
+            background_normal="",
+            background_color=(0, 0, 0, 0),  # 系统背景透明，完全用 canvas 画
+            color=(1, 1, 1, 1),
+        )
+
+        # 颜色（松开 / 按下）
+        btn._col_up = (0.20, 0.20, 0.20, 0.88)
+        btn._col_down = (0.12, 0.12, 0.12, 0.95)
+
+        with btn.canvas.before:
+            btn._bg_color = Color(*btn._col_up)
+            btn._bg_rect = RoundedRectangle(
+                pos=btn.pos,
+                size=btn.size,
+                radius=[48],  # 高度 96 → 半径 48 = 胶囊
+            )
+
+        def _sync(*_):
+            btn._bg_rect.pos = btn.pos
+            btn._bg_rect.size = btn.size
+            btn._bg_rect.radius = [btn.height / 2]  # 永远保持胶囊圆角
+
+        btn.bind(pos=_sync, size=_sync)
+
+        def _down(*_):
+            btn._bg_color.rgba = btn._col_down
+
+        def _up(*_):
+            btn._bg_color.rgba = btn._col_up
+
+        btn.bind(on_press=_down, on_release=_up)
+        return btn
 
     # ------------------ 工具 ------------------
 
     def _fallback_bg(self) -> str:
-        # 优先用 assets 里第一张 listen_bg
         if hasattr(self, "listen_bgs") and self.listen_bgs:
             return self.listen_bgs[0]
-        # 再兜底用 root 下 icon.png（如果有）
         icon = os.path.join(_app_dir(), "icon.png")
         if os.path.exists(icon):
             return icon
@@ -237,7 +272,6 @@ class ProtonApp(App):
     def _play_sound(self, path: str, loop: bool = False):
         self._stop_sound()
         if not path or not os.path.exists(path):
-            # 不崩溃，只提示
             self.top_label.text = f"找不到音频：{os.path.basename(path) if path else '空路径'}"
             return
         self.sound = SoundLoader.load(path)
@@ -250,13 +284,11 @@ class ProtonApp(App):
     # ------------------ 模式切换 ------------------
 
     def _clear_content(self):
-        # 只清 content_area 里的控件
         self.content_area.clear_widgets()
 
     def _show_home(self):
         self.mode = "home"
         self._clear_content()
-        # 背景回到默认
         self._set_bg(self._fallback_bg())
 
     def _show_novel(self):
@@ -276,7 +308,6 @@ class ProtonApp(App):
     # ------------------ 按钮逻辑 ------------------
 
     def on_listen_press(self, *args):
-        # 每按一次：下一首 + 下一背景 + 播放
         self.mode = "listen"
 
         if not self.listen_tracks:
@@ -292,17 +323,15 @@ class ProtonApp(App):
         track = self.listen_tracks[self.listen_index]
         bg = self.listen_bgs[self.bg_index]
 
-        self._clear_content()      # 听歌模式不显示小说区域
+        self._clear_content()
         self._set_bg(bg)
         self._play_sound(track, loop=False)
 
         self.top_label.text = f"听歌：{os.path.basename(track)} | 背景：{os.path.basename(bg)}"
 
     def on_novel_press(self, *args):
-        # 第一次按：进入小说模式（背景固定）
-        # 后续按：翻页（背景不切换）
         if self.mode != "novel":
-            self._stop_sound()  # 看小说不播放
+            self._stop_sound()
             self.novel_page_i = 0
             self._show_novel()
             self.top_label.text = "小说模式：再按一次翻页（背景不切换）"
@@ -311,19 +340,14 @@ class ProtonApp(App):
             self._render_novel_page()
 
     def on_love_press(self, *args):
-        # 第一次按：切背景 + 播放 love 音频
-        # 后续按：只切音频，不切背景
-        if not self.love_tracks:
-            self.top_label.text = "没找到 love*.mp3（你后续上传后会自动识别）"
-            # 但仍然切到 love 背景（如果有）
-            self._set_bg(self.love_bg)
-            self.mode = "love"
-            return
-
         if self.mode != "love":
             self.mode = "love"
             self._clear_content()
             self._set_bg(self.love_bg)
+
+        if not self.love_tracks:
+            self.top_label.text = "没找到 love*.mp3（你上传后会自动识别）"
+            return
 
         self.love_index = (self.love_index + 1) % len(self.love_tracks)
         track = self.love_tracks[self.love_index]
