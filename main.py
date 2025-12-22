@@ -1,335 +1,335 @@
+# main.py  （整文件覆盖版）
+import os
+import re
+
 from kivy.app import App
-from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.core.audio import SoundLoader
+from kivy.core.window import Window
+from kivy.resources import resource_add_path
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.image import Image
+from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
-from kivy.uix.scrollview import ScrollView
 from kivy.uix.label import Label
-
-from kivy.core.audio import SoundLoader
-from kivy.core.text import LabelBase
-from kivy.resources import resource_find
-from kivy.clock import Clock
+from kivy.uix.scrollview import ScrollView
 
 
-# ========== 工具：安全找资源 ==========
-def rfind(name: str) -> str:
-    p = resource_find(name)
-    return p if p else ""
+def _app_dir() -> str:
+    return os.path.dirname(os.path.abspath(__file__))
 
 
-# ========== Screen 1：应用内欢迎页（用来实现“加载界面一句话”） ==========
-class SplashScreen(Screen):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+def _safe_listdir(path: str):
+    try:
+        return os.listdir(path)
+    except Exception:
+        return []
 
+
+def _sort_by_number(files, pattern: str):
+    # pattern example: r"^listen(\d+)\.mp3$"
+    reg = re.compile(pattern, re.IGNORECASE)
+    pairs = []
+    for f in files:
+        m = reg.match(f)
+        if m:
+            pairs.append((int(m.group(1)), f))
+    pairs.sort(key=lambda x: x[0])
+    return [f for _, f in pairs]
+
+
+def _pick_existing(path_candidates):
+    for p in path_candidates:
+        if p and os.path.exists(p):
+            return p
+    return ""
+
+
+class ProtonApp(App):
+    def build(self):
+        # 让 Kivy 认识当前目录与 assets 目录
+        self.root_dir = _app_dir()
+        self.assets_dir = os.path.join(self.root_dir, "assets")
+        resource_add_path(self.root_dir)
+        resource_add_path(self.assets_dir)
+
+        # ====== 扫描资源（B：自动识别，不用你手写列表）======
+        root_files = _safe_listdir(self.root_dir)
+        assets_files = _safe_listdir(self.assets_dir)
+
+        # 音乐：支持放根目录 或 assets/
+        listen_mp3_root = _sort_by_number(root_files, r"^listen(\d+)\.mp3$")
+        listen_mp3_assets = _sort_by_number(assets_files, r"^listen(\d+)\.mp3$")
+        self.listen_tracks = []
+
+        # 先用 assets 的（更规范），再补根目录的
+        for f in listen_mp3_assets:
+            self.listen_tracks.append(os.path.join(self.assets_dir, f))
+        for f in listen_mp3_root:
+            self.listen_tracks.append(os.path.join(self.root_dir, f))
+
+        # 背景图：只认 assets/ 里的 listen_bgN.png
+        listen_bg_assets = _sort_by_number(assets_files, r"^listen_bg(\d+)\.png$")
+        self.listen_bgs = [os.path.join(self.assets_dir, f) for f in listen_bg_assets]
+
+        # 兜底：你至少要有 1 首歌或 1 张图，否则不崩溃但会提示
+        self.listen_index = -1
+        self.bg_index = -1
+
+        # ====== “爱”模式的占位资源（你后续上传时按这个命名）======
+        # 背景：assets/love_bg.png
+        # 音频：love1.mp3, love2.mp3...（放根目录或 assets 都行）
+        self.love_bg = _pick_existing([
+            os.path.join(self.assets_dir, "love_bg.png"),
+            # 没有就兜底用第一张 listen 背景
+            self.listen_bgs[0] if self.listen_bgs else "",
+        ])
+
+        love_mp3_root = _sort_by_number(root_files, r"^love(\d+)\.mp3$")
+        love_mp3_assets = _sort_by_number(assets_files, r"^love(\d+)\.mp3$")
+        self.love_tracks = []
+        for f in love_mp3_assets:
+            self.love_tracks.append(os.path.join(self.assets_dir, f))
+        for f in love_mp3_root:
+            self.love_tracks.append(os.path.join(self.root_dir, f))
+        self.love_index = -1
+
+        # ====== 小说模式占位资源（你后续上传时按这个命名）======
+        # 背景：assets/novel_bg.png
+        self.novel_bg = _pick_existing([
+            os.path.join(self.assets_dir, "novel_bg.png"),
+            self.listen_bgs[0] if self.listen_bgs else "",
+        ])
+        self.novel_text = (
+            "【小说占位内容】\n\n"
+            "你把大约 5000 字的小说文本发我，我会替换到这里。\n\n"
+            "当前版本用于验证：进入小说模式 → 再按按钮翻页（背景不变）。\n\n"
+            "第 1 页示例：\n" + ("静静，" * 200)
+        )
+        self.novel_pages = self._paginate_text(self.novel_text, page_chars=800)
+        self.novel_page_i = 0
+
+        # ====== 播放器 ======
+        self.sound = None
+        self.mode = "home"  # home / listen / novel / love
+
+        # ====== UI ======
         root = FloatLayout()
 
-        # 你可以把这里背景换成你想要的（也可以用 presplash.png 同一张）
-        bg = Image(
-            source=rfind("presplash.png") or rfind("app_icon.png"),
+        # 背景图层
+        self.bg = Image(
+            source=self._fallback_bg(),
             allow_stretch=True,
-            keep_ratio=False
+            keep_ratio=False,
+            size_hint=(1, 1),
+            pos_hint={"x": 0, "y": 0},
         )
-        root.add_widget(bg)
+        root.add_widget(self.bg)
 
-        self.label = Label(
+        # 中间内容层（小说用）
+        self.content_area = FloatLayout(size_hint=(1, 1))
+        root.add_widget(self.content_area)
+
+        # 顶部欢迎文本（你要的那句话，做成 App 内“等待/欢迎”显示）
+        self.top_label = Label(
             text="你好，静静，我是质子 1 号 。褚少华派我来陪伴你。",
-            font_name="NotoSansSC",
-            font_size=24,
-            halign="center",
-            valign="middle",
-            size_hint=(0.9, 0.3),
-            pos_hint={"center_x": 0.5, "center_y": 0.18}
+            size_hint=(1, None),
+            height=80,
+            pos_hint={"x": 0, "top": 1},
+            font_size=20,
         )
-        self.label.bind(size=lambda *_: setattr(self.label, "text_size", self.label.size))
-        root.add_widget(self.label)
+        root.add_widget(self.top_label)
 
-        self.add_widget(root)
-
-    def on_enter(self, *args):
-        # 1.2 秒后进入主菜单
-        Clock.schedule_once(lambda dt: self.manager.set_current("menu"), 1.2)
-
-
-# ========== Screen 2：主菜单（3 个按钮） ==========
-class MenuScreen(Screen):
-    def __init__(self, app, **kwargs):
-        super().__init__(**kwargs)
-        self.app = app
-
-        root = FloatLayout()
-
-        # 默认背景：先用 listen_bg1 做兜底，没有就黑
-        self.bg = Image(
-            source=rfind("listen_bg1.png"),
-            allow_stretch=True,
-            keep_ratio=False
+        # 底部按钮区
+        btn_box = BoxLayout(
+            orientation="vertical",
+            spacing=16,
+            padding=24,
+            size_hint=(1, None),
+            height=320,
+            pos_hint={"x": 0, "y": 0},
         )
-        root.add_widget(self.bg)
 
-        # 三个按钮：文字必须完全按你写的
-        self.btn1 = Button(
+        self.btn_listen = Button(
             text="和褚少华一起听歌",
-            font_name="NotoSansSC",
-            font_size=28,
-            size_hint=(0.88, 0.16),
-            pos_hint={"center_x": 0.5, "center_y": 0.62},
-            background_normal="",
-            background_color=(0.2, 0.2, 0.2, 0.7),
-            color=(1, 1, 1, 1)
+            font_size=26,
+            size_hint=(1, 1),
         )
-        self.btn2 = Button(
+        self.btn_listen.bind(on_press=self.on_listen_press)
+
+        self.btn_novel = Button(
             text="和褚少华一起看小说",
-            font_name="NotoSansSC",
-            font_size=28,
-            size_hint=(0.88, 0.16),
-            pos_hint={"center_x": 0.5, "center_y": 0.42},
-            background_normal="",
-            background_color=(0.2, 0.2, 0.2, 0.7),
-            color=(1, 1, 1, 1)
+            font_size=26,
+            size_hint=(1, 1),
         )
-        self.btn3 = Button(
+        self.btn_novel.bind(on_press=self.on_novel_press)
+
+        self.btn_love = Button(
             text="我爱褚少华",
-            font_name="NotoSansSC",
-            font_size=28,
-            size_hint=(0.88, 0.16),
-            pos_hint={"center_x": 0.5, "center_y": 0.22},
-            background_normal="",
-            background_color=(0.2, 0.2, 0.2, 0.7),
-            color=(1, 1, 1, 1)
+            font_size=26,
+            size_hint=(1, 1),
         )
+        self.btn_love.bind(on_press=self.on_love_press)
 
-        self.btn1.bind(on_release=lambda *_: self.app.action_listen(self))
-        self.btn2.bind(on_release=lambda *_: self.app.action_novel(self))
-        self.btn3.bind(on_release=lambda *_: self.app.action_love(self))
+        btn_box.add_widget(self.btn_listen)
+        btn_box.add_widget(self.btn_novel)
+        btn_box.add_widget(self.btn_love)
 
-        root.add_widget(self.btn1)
-        root.add_widget(self.btn2)
-        root.add_widget(self.btn3)
+        root.add_widget(btn_box)
 
-        self.add_widget(root)
-
-
-# ========== Screen 3：小说阅读页（固定背景 + 翻页） ==========
-class ReaderScreen(Screen):
-    def __init__(self, app, **kwargs):
-        super().__init__(**kwargs)
-        self.app = app
-
-        root = FloatLayout()
-
-        self.bg = Image(
-            source=rfind("novel_bg.png"),
-            allow_stretch=True,
-            keep_ratio=False
+        # 小说控件（先创建但不显示）
+        self.novel_scroll = ScrollView(
+            size_hint=(0.92, 0.55),
+            pos_hint={"center_x": 0.5, "center_y": 0.62},
         )
-        root.add_widget(self.bg)
-
-        # 小说内容区域（ScrollView + Label）
-        self.scroll = ScrollView(
-            size_hint=(0.92, 0.68),
-            pos_hint={"center_x": 0.5, "center_y": 0.60},
-            do_scroll_x=False
-        )
-
-        self.label = Label(
+        self.novel_label = Label(
             text="",
-            font_name="NotoSansSC",
-            font_size=22,
+            size_hint_y=None,
+            text_size=(Window.width * 0.86, None),
+            font_size=20,
             halign="left",
             valign="top",
-            size_hint_y=None
         )
-        self.label.bind(width=self._update_text_size)
+        self.novel_label.bind(texture_size=self._update_novel_label_height)
+        self.novel_scroll.add_widget(self.novel_label)
 
-        self.scroll.add_widget(self.label)
-        root.add_widget(self.scroll)
+        # 初始状态：只显示背景 + 顶部话
+        self._show_home()
 
-        # 翻页按钮（沿用第二按钮文字，不改字）
-        self.next_btn = Button(
-            text="和褚少华一起看小说",
-            font_name="NotoSansSC",
-            font_size=26,
-            size_hint=(0.88, 0.14),
-            pos_hint={"center_x": 0.5, "center_y": 0.14},
-            background_normal="",
-            background_color=(0.2, 0.2, 0.2, 0.75),
-            color=(1, 1, 1, 1)
-        )
-        self.next_btn.bind(on_release=lambda *_: self.app.novel_next_page())
-        root.add_widget(self.next_btn)
+        return root
 
-        self.add_widget(root)
+    # ------------------ 工具 ------------------
 
-    def _update_text_size(self, *_):
-        self.label.text_size = (self.label.width, None)
+    def _fallback_bg(self) -> str:
+        # 优先用 assets 里第一张 listen_bg
+        if hasattr(self, "listen_bgs") and self.listen_bgs:
+            return self.listen_bgs[0]
+        # 再兜底用 root 下 icon.png（如果有）
+        icon = os.path.join(_app_dir(), "icon.png")
+        if os.path.exists(icon):
+            return icon
+        return ""
 
-    def set_page_text(self, text: str):
-        self.label.text = text
-        # 让 label 高度随文字增长（否则 scroll 不工作）
-        self.label.texture_update()
-        self.label.height = self.label.texture_size[1]
-        self.scroll.scroll_y = 1
-
-
-# ========== ScreenManager 小扩展 ==========
-class MySM(ScreenManager):
-    def set_current(self, name: str):
-        self.current = name
-
-
-class MyApp(App):
-    def build(self):
-        # 1) 中文字体注册（必须）
-        font_path = rfind("NotoSansSC-VariableFont_wght.ttf")
-        if font_path:
-            LabelBase.register(name="NotoSansSC", fn_regular=font_path)
-
-        # 2) 音频状态
-        self.sound = None
-        self.mode = None  # "listen" / "love" / None
-
-        # 3) 听歌资源（3 首 + 3 背景）
-        self.listen_tracks = [rfind("listen1.mp3"), rfind("listen2.mp3"), rfind("listen3.mp3")]
-        self.listen_bgs = [rfind("listen_bg1.png"), rfind("listen_bg2.png"), rfind("listen_bg3.png")]
-        self.listen_i = -1
-
-        # 4) love 资源（背景只切一次 + 音频循环切换）
-        self.love_bg = rfind("love_bg.png")
-        self.love_tracks = [rfind("love1.mp3"), rfind("love2.mp3"), rfind("love3.mp3")]
-        self.love_i = -1
-        self.love_bg_applied = False
-
-        # 5) 小说资源（固定背景 + 分页）
-        self.novel_text = self._load_text("novel.txt")
-        self.novel_page_size = 900  # 每页约 900 字（你觉得太少/太多再调）
-        self.novel_pages = self._split_pages(self.novel_text, self.novel_page_size)
-        self.novel_page_index = 0
-
-        # 6) 组装界面
-        self.sm = MySM()
-        self.sm.add_widget(SplashScreen(name="splash"))
-        self.menu = MenuScreen(app=self, name="menu")
-        self.reader = ReaderScreen(app=self, name="reader")
-
-        self.sm.add_widget(self.menu)
-        self.sm.add_widget(self.reader)
-
-        self.sm.current = "splash"
-        return self.sm
-
-    # ====== 公共：停止当前音频 ======
-    def stop_sound(self):
-        if self.sound:
-            try:
-                self.sound.stop()
-            except:
-                pass
-        self.sound = None
-
-    # ====== 公共：播放指定音频（只在按钮点击时调用） ======
-    def play_sound(self, path: str):
-        if not path:
-            return
-        self.stop_sound()
-        s = SoundLoader.load(path)
-        if not s:
-            return
-        s.loop = True
-        s.play()
-        self.sound = s
-
-    # ========== 按钮 1：听歌（按一下：切一首 + 切背景） ==========
-    def action_listen(self, menu_screen: MenuScreen):
-        self.mode = "listen"
-        self.love_bg_applied = False  # 切回听歌时，允许下次 love 再切背景一次
-
-        # 下一个 index
-        self.listen_i = (self.listen_i + 1) % 3
-
-        # 切背景
-        bg = self.listen_bgs[self.listen_i] if self.listen_bgs[self.listen_i] else ""
-        if bg:
-            menu_screen.bg.source = bg
-            menu_screen.bg.reload()
-
-        # 切音频
-        track = self.listen_tracks[self.listen_i]
-        self.play_sound(track)
-
-    # ========== 按钮 2：看小说 ==========
-    # 第一次按：进入阅读页 + 显示第 1 页
-    # 后续在阅读页按同名按钮：翻页（背景不切）
-    def action_novel(self, menu_screen: MenuScreen):
-        self.mode = "novel"
-        # 看小说不要求播放音频，保险起见先停
-        self.stop_sound()
-        self.novel_page_index = 0
-        self._show_current_page()
-        self.sm.set_current("reader")
-
-    def novel_next_page(self):
-        if not self.novel_pages:
-            return
-        self.novel_page_index = (self.novel_page_index + 1) % len(self.novel_pages)
-        self._show_current_page()
-
-    def _show_current_page(self):
-        if not self.novel_pages:
-            self.reader.set_page_text("novel.txt 没有内容或未找到。")
-            return
-        page_text = self.novel_pages[self.novel_page_index]
-        # 可以加一个页码提示（不改按钮文字，只在正文末尾附加）
-        footer = f"\n\n—— 第 {self.novel_page_index + 1} / {len(self.novel_pages)} 页 ——"
-        self.reader.set_page_text(page_text + footer)
-
-    # ========== 按钮 3：我爱褚少华 ==========
-    # 第一次按：切 love_bg + 播放 love1
-    # 后续再按：只切换 love 音频（背景不再切）
-    def action_love(self, menu_screen: MenuScreen):
-        self.mode = "love"
-
-        # 第一次进入 love：切背景一次
-        if (not self.love_bg_applied) and self.love_bg:
-            menu_screen.bg.source = self.love_bg
-            menu_screen.bg.reload()
-            self.love_bg_applied = True
-
-        # 每次按都切音频
-        if not self.love_tracks:
-            return
-        self.love_i = (self.love_i + 1) % len(self.love_tracks)
-        self.play_sound(self.love_tracks[self.love_i])
-
-    # ====== 读文本 ======
-    def _load_text(self, filename: str) -> str:
-        path = rfind(filename)
-        if not path:
-            return ""
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return f.read()
-        except:
-            # 某些情况下可能是 utf-8-sig
-            try:
-                with open(path, "r", encoding="utf-8-sig") as f:
-                    return f.read()
-            except:
-                return ""
-
-    # ====== 分页（按字符数粗切，稳定够用） ======
-    def _split_pages(self, text: str, size: int):
-        if not text:
-            return []
+    def _paginate_text(self, text: str, page_chars: int = 800):
         pages = []
-        i = 0
+        cur = 0
         n = len(text)
-        while i < n:
-            pages.append(text[i:i + size])
-            i += size
-        return pages
+        while cur < n:
+            pages.append(text[cur: cur + page_chars])
+            cur += page_chars
+        return pages if pages else [""]
+
+    def _update_novel_label_height(self, *args):
+        self.novel_label.height = self.novel_label.texture_size[1] + 20
+
+    def _set_bg(self, path: str):
+        if path and os.path.exists(path):
+            self.bg.source = path
+            self.bg.reload()
+
+    def _stop_sound(self):
+        try:
+            if self.sound:
+                self.sound.stop()
+        except Exception:
+            pass
+        self.sound = None
+
+    def _play_sound(self, path: str, loop: bool = False):
+        self._stop_sound()
+        if not path or not os.path.exists(path):
+            # 不崩溃，只提示
+            self.top_label.text = f"找不到音频：{os.path.basename(path) if path else '空路径'}"
+            return
+        self.sound = SoundLoader.load(path)
+        if self.sound:
+            self.sound.loop = loop
+            self.sound.play()
+        else:
+            self.top_label.text = f"无法加载音频：{os.path.basename(path)}"
+
+    # ------------------ 模式切换 ------------------
+
+    def _clear_content(self):
+        # 只清 content_area 里的控件
+        self.content_area.clear_widgets()
+
+    def _show_home(self):
+        self.mode = "home"
+        self._clear_content()
+        # 背景回到默认
+        self._set_bg(self._fallback_bg())
+
+    def _show_novel(self):
+        self.mode = "novel"
+        self._clear_content()
+        self._set_bg(self.novel_bg)
+        self.content_area.add_widget(self.novel_scroll)
+        self._render_novel_page()
+
+    def _render_novel_page(self):
+        if not self.novel_pages:
+            self.novel_pages = [""]
+        total = len(self.novel_pages)
+        i = self.novel_page_i % total
+        self.novel_label.text = f"[第 {i+1}/{total} 页]\n\n{self.novel_pages[i]}"
+
+    # ------------------ 按钮逻辑 ------------------
+
+    def on_listen_press(self, *args):
+        # 每按一次：下一首 + 下一背景 + 播放
+        self.mode = "listen"
+
+        if not self.listen_tracks:
+            self.top_label.text = "没找到 listen*.mp3（放根目录或 assets 都行）"
+            return
+        if not self.listen_bgs:
+            self.top_label.text = "没找到 assets/listen_bg*.png"
+            return
+
+        self.listen_index = (self.listen_index + 1) % len(self.listen_tracks)
+        self.bg_index = (self.bg_index + 1) % len(self.listen_bgs)
+
+        track = self.listen_tracks[self.listen_index]
+        bg = self.listen_bgs[self.bg_index]
+
+        self._clear_content()      # 听歌模式不显示小说区域
+        self._set_bg(bg)
+        self._play_sound(track, loop=False)
+
+        self.top_label.text = f"听歌：{os.path.basename(track)} | 背景：{os.path.basename(bg)}"
+
+    def on_novel_press(self, *args):
+        # 第一次按：进入小说模式（背景固定）
+        # 后续按：翻页（背景不切换）
+        if self.mode != "novel":
+            self._stop_sound()  # 看小说不播放
+            self.novel_page_i = 0
+            self._show_novel()
+            self.top_label.text = "小说模式：再按一次翻页（背景不切换）"
+        else:
+            self.novel_page_i += 1
+            self._render_novel_page()
+
+    def on_love_press(self, *args):
+        # 第一次按：切背景 + 播放 love 音频
+        # 后续按：只切音频，不切背景
+        if not self.love_tracks:
+            self.top_label.text = "没找到 love*.mp3（你后续上传后会自动识别）"
+            # 但仍然切到 love 背景（如果有）
+            self._set_bg(self.love_bg)
+            self.mode = "love"
+            return
+
+        if self.mode != "love":
+            self.mode = "love"
+            self._clear_content()
+            self._set_bg(self.love_bg)
+
+        self.love_index = (self.love_index + 1) % len(self.love_tracks)
+        track = self.love_tracks[self.love_index]
+        self._play_sound(track, loop=False)
+        self.top_label.text = f"我爱褚少华：{os.path.basename(track)}"
 
 
 if __name__ == "__main__":
-    MyApp().run()
+    ProtonApp().run()
