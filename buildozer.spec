@@ -14,7 +14,7 @@ fullscreen = 1
 icon.filename = icon.png
 presplash.filename =
 
-version = 0.4
+version = 0.5
 
 android.api = 33
 android.minapi = 21
