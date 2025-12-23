@@ -1,4 +1,4 @@
-# main.py（v0 稳定版：无 CoreImage/无线程预热；bg7=爱；bg8=小说；小说主题曲 listen8）
+# main.py（v0 圣诞稳定版：无 CoreImage / 无线程；启动不自动播放；小说正文红色；按钮圣诞配色）
 import os
 import re
 
@@ -54,7 +54,7 @@ class ProtonApp(App):
         root_files = _safe_listdir(self.root_dir)
         assets_files = _safe_listdir(self.assets_dir)
 
-        # 字体兜底（按钮中文）
+        # 字体兜底
         self.font = _pick_existing([
             os.path.join(self.root_dir, "NotoSansSC-VariableFont_wght.ttf"),
             os.path.join(self.assets_dir, "NotoSansSC-VariableFont_wght.ttf"),
@@ -108,6 +108,9 @@ class ProtonApp(App):
         self.listen_index = -1
         self.bg_index = -1
 
+        # 音频缓存（减少“切歌卡顿”的概率：同一首第二次开始会更顺）
+        self._sound_cache = {}
+
         # -------------------------
         # UI
         # -------------------------
@@ -123,9 +126,9 @@ class ProtonApp(App):
         )
         root.add_widget(self.bg)
 
-        # 顶部文字
+        # 顶部文字（圣诞主题文案）
         self.top_label = Label(
-            text="你好，静静，我是质子 1 号 。褚少华派我来陪伴你。",
+            text="🎄 圣诞快乐，静静。质子 1 号陪你过这个冬天。",
             size_hint=(1, None),
             height=92,
             pos_hint={"x": 0, "top": 1},
@@ -175,11 +178,12 @@ class ProtonApp(App):
             halign="left",
             valign="top",
             font_name=self.font if self.font else None,
+            color=(0.85, 0.10, 0.10, 1),  # ✅ 小说正文红色（圣诞红）
         )
         self.novel_label.bind(texture_size=self._update_novel_label_height)
         self.novel_scroll.add_widget(self.novel_label)
 
-        # 初始背景（启动时不播放任何音乐）
+        # ✅ 启动时：只显示首页（不播放任何音乐）
         self._show_home()
 
         return root
@@ -201,8 +205,10 @@ class ProtonApp(App):
             background_color=(0, 0, 0, 0),
             color=(1, 1, 1, 1),
         )
-        btn._col_up = (0.15, 0.15, 0.15, 0.78)
-        btn._col_down = (0.10, 0.10, 0.10, 0.92)
+
+        # ✅ 圣诞按钮配色（不加特效，只换颜色）
+        btn._col_up = (0.12, 0.22, 0.16, 0.80)    # 圣诞深绿
+        btn._col_down = (0.45, 0.12, 0.12, 0.90)  # 圣诞暗红（按下）
 
         with btn.canvas.before:
             btn._bg_color = Color(*btn._col_up)
@@ -245,17 +251,35 @@ class ProtonApp(App):
             pass
         self.sound = None
 
+    def _get_sound_cached(self, path: str):
+        # 缓存命中：减少切歌再次加载的卡顿
+        s = self._sound_cache.get(path)
+        if s:
+            return s
+        s = SoundLoader.load(path)
+        if s:
+            self._sound_cache[path] = s
+        return s
+
     def _play_sound(self, path: str, loop: bool = False):
         self._stop_sound()
         if not path or not os.path.exists(path):
             self.top_label.text = f"找不到音频：{os.path.basename(path) if path else '空路径'}"
             return
-        s = SoundLoader.load(path)
+
+        s = self._get_sound_cached(path)
         if not s:
             self.top_label.text = f"无法加载音频：{os.path.basename(path)}"
             return
+
         self.sound = s
         self.sound.loop = loop
+        try:
+            # 有些后端支持 seek(0)；不支持也不影响
+            if hasattr(self.sound, "seek"):
+                self.sound.seek(0)
+        except Exception:
+            pass
         self.sound.play()
 
     # ------------------ 小说 ------------------
@@ -270,7 +294,8 @@ class ProtonApp(App):
     def _render_novel_page(self):
         total = len(self.novel_pages)
         i = self.novel_page_i % total
-        self.novel_label.text = f"第 {i+1}/{total} 页\n\n{self.novel_pages[i]}"
+        # 轻量圣诞氛围：只加一个符号，不引入任何特效
+        self.novel_label.text = f"🎄 第 {i+1}/{total} 页\n\n{self.novel_pages[i]}"
 
     # ------------------ 模式 ------------------
 
@@ -287,7 +312,7 @@ class ProtonApp(App):
         self.mode = "home"
         self._clear_content()
         self._set_bg(self._fallback_bg())
-        # 启动时：不自动播放任何音乐（这里不播）
+        # ✅ 首页不播放任何音乐（删除“进App自动循环listen8”的功能）
 
     def _show_novel(self):
         self.mode = "novel"
@@ -296,7 +321,7 @@ class ProtonApp(App):
         self.content_area.add_widget(self.novel_scroll)
         self._render_novel_page()
 
-        # ✅ 保留：进入小说才循环 listen8
+        # 小说主题曲：listen8（循环）——只在进入小说模式时播放
         if self.novel_track:
             self._play_sound(self.novel_track, loop=True)
         else:
@@ -323,7 +348,7 @@ class ProtonApp(App):
 
         self._set_bg(bg)
         self._play_sound(track, loop=False)
-        self.top_label.text = f"听歌：{os.path.basename(track)} | 背景：{os.path.basename(bg)}"
+        self.top_label.text = f"🎄 听歌：{os.path.basename(track)} | 背景：{os.path.basename(bg)}"
 
     def on_love_press(self, *_):
         self.mode = "love"
@@ -336,7 +361,7 @@ class ProtonApp(App):
             return
 
         self._play_sound(self.love_track, loop=False)
-        self.top_label.text = "我爱褚少华：listen7.mp3 | 背景：listen_bg7.png"
+        self.top_label.text = "🎄 我爱褚少华：listen7.mp3 | 背景：listen_bg7.png"
 
     def on_novel_press(self, *_):
         # 第一次：进入小说（bg8 + 循环 listen8）
@@ -344,7 +369,7 @@ class ProtonApp(App):
         if self.mode != "novel":
             self.novel_page_i = 0
             self._show_novel()
-            self.top_label.text = "小说模式：再按一次翻页（背景固定 bg8，主题曲 listen8 循环）"
+            self.top_label.text = "🎄 小说模式：再按一次翻页（背景固定 bg8，主题曲 listen8 循环）"
         else:
             self.novel_page_i += 1
             self._render_novel_page()
