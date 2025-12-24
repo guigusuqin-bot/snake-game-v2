@@ -168,7 +168,7 @@ class ProtonApp(App):
 
         # 顶部大标题（不动）
         self.top_label = Label(
-            text="🎄❄️ 我是质子 1 号：圣诞快乐，静静。❄️🎄",
+            text="🎄❄️ 我是质子 1 号：圣诞快乐，。❄️🎄",
             size_hint=(1, None),
             height=120,
             pos_hint={"center_x": 0.5, "top": 1},
@@ -455,7 +455,7 @@ class ProtonApp(App):
             # 这里用 App 的 root（FloatLayout）上的 children 关系：我们把 btn_box 加到 root（self.root）
             self.root.add_widget(self.btn_box)
 
-        self.top_label.text = "🎄❄️ 我是质子 1 号：圣诞快乐，静静。❄️🎄"
+        self.top_label.text = "🎄❄️ 我是质子 1 号：圣诞快乐，。❄️🎄"
 
     # ----------------- 事件：开始界面“进入” -----------------
     def on_enter_press(self, *_):
