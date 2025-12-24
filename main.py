@@ -1,87 +1,65 @@
-# main.py  (Final UI + Snow + No Auto Play + No Thread + No CoreImage)
 import os
-import re
 import random
+from typing import Dict, List
 
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.core.audio import SoundLoader
 from kivy.core.window import Window
 from kivy.resources import resource_add_path
+
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.image import Image
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
 from kivy.uix.scrollview import ScrollView
-from kivy.graphics import Color, RoundedRectangle, Line, Ellipse, Rectangle
-from kivy.animation import Animation
+
+from kivy.graphics import Color, RoundedRectangle, Line, Ellipse
 
 
-# ---------------------- Utils ----------------------
+# ----------------- 工具函数 -----------------
 def _app_dir() -> str:
     return os.path.dirname(os.path.abspath(__file__))
 
 
-def _safe_listdir(path: str):
-    try:
-        return os.listdir(path)
-    except Exception:
-        return []
-
-
-def _sort_by_number(files, pattern: str):
-    reg = re.compile(pattern, re.IGNORECASE)
-    pairs = []
-    for f in files:
-        m = reg.match(f)
-        if m:
-            pairs.append((int(m.group(1)), f))
-    pairs.sort(key=lambda x: x[0])
-    return [f for _, f in pairs]
-
-
-def _pick_existing(path_candidates):
-    for p in path_candidates:
+def _pick_existing(paths: List[str]) -> str:
+    for p in paths:
         if p and os.path.exists(p):
             return p
     return ""
 
 
-# ---------------------- Snow Layer (Canvas + Clock, no thread) ----------------------
+# ----------------- 雪花层（轻量） -----------------
 class SnowLayer(FloatLayout):
-    """
-    轻量雪花层：纯 Canvas + Clock 更新；无线程；不卡为第一目标
-    """
-    def __init__(self, count=26, **kwargs):
+    """轻量雪花：Canvas 画 Ellipse，30fps，不卡为第一目标"""
+
+    def __init__(self, count: int = 28, **kwargs):
         super().__init__(**kwargs)
         self.count = int(count)
-        self._flakes = []
+        self._flakes: List[Dict] = []
         self._running = False
 
         Window.bind(size=self._on_resize)
 
         with self.canvas:
-            self._snow_color = Color(1, 1, 1, 0.75)
+            self._snow_color = Color(1, 1, 1, 0.78)
             for _ in range(self.count):
                 flake = self._new_flake(spawn_top=False)
                 e = Ellipse(pos=(flake["x"], flake["y"]), size=(flake["r"], flake["r"]))
                 flake["e"] = e
                 self._flakes.append(flake)
 
-    def _new_flake(self, spawn_top=False):
+    def _new_flake(self, spawn_top: bool = False) -> Dict:
         w, h = Window.size
-        r = random.uniform(2.0, 5.0)
+        r = random.uniform(2.2, 5.6)
         x = random.uniform(0, max(1, w - r))
-        if spawn_top:
-            y = random.uniform(h, h + h * 0.25)
-        else:
-            y = random.uniform(0, h)
-        vy = random.uniform(55.0, 130.0)
-        vx = random.uniform(-12.0, 12.0)
+        y = random.uniform(h, h + h * 0.25) if spawn_top else random.uniform(0, h)
+        vy = random.uniform(55.0, 125.0)
+        vx = random.uniform(-22.0, 22.0)
+        wob = random.uniform(0.6, 1.5)
         phase = random.uniform(0, 6.28)
-        wob = random.uniform(0.8, 1.8)
-        return {"x": x, "y": y, "r": r, "vy": vy, "vx": vx, "phase": phase, "wob": wob}
+        return {"x": x, "y": y, "r": r, "vy": vy, "vx": vx, "wob": wob, "phase": phase}
 
     def _on_resize(self, *_):
         if not self._flakes:
@@ -107,22 +85,18 @@ class SnowLayer(FloatLayout):
         self._running = False
         Clock.unschedule(self._tick)
 
-    def _tick(self, dt):
+    def _tick(self, dt: float):
         w, h = Window.size
         for f in self._flakes:
             f["y"] -= f["vy"] * dt
-
-            # 轻飘的横向漂移（不抖、不飙）
             f["x"] += f["vx"] * dt
-            f["x"] += (f["wob"] * 10.0) * dt * (random.uniform(-1, 1))
+            f["x"] += (f["wob"] * 20.0) * dt * (random.uniform(-1.0, 1.0))
 
-            # wrap
             if f["x"] < -10:
                 f["x"] = w + 10
             if f["x"] > w + 10:
                 f["x"] = -10
 
-            # 到底重生
             if f["y"] < -20:
                 nf = self._new_flake(spawn_top=True)
                 f.update(nf)
@@ -130,7 +104,7 @@ class SnowLayer(FloatLayout):
             f["e"].pos = (f["x"], f["y"])
 
 
-# ---------------------- App ----------------------
+# ----------------- 主 App -----------------
 class ProtonApp(App):
     def build(self):
         self.root_dir = _app_dir()
@@ -139,49 +113,41 @@ class ProtonApp(App):
         resource_add_path(self.root_dir)
         resource_add_path(self.assets_dir)
 
-        root_files = _safe_listdir(self.root_dir)
-        assets_files = _safe_listdir(self.assets_dir)
-
-        # 字体兜底（可没有）
+        # 字体（可选）
         self.font = _pick_existing([
             os.path.join(self.root_dir, "NotoSansSC-VariableFont_wght.ttf"),
             os.path.join(self.assets_dir, "NotoSansSC-VariableFont_wght.ttf"),
         ])
 
-        # 背景：assets/listen_bg1~8.png（注意：你的截图是 listen_bg1.png 带下划线）
-        self.bg_love = os.path.join(self.assets_dir, "listen_bg7.png")
-        self.bg_novel = os.path.join(self.assets_dir, "listen_bg8.png")
+        # 背景（固定命名）
+        def bg(n: int) -> str:
+            return os.path.join(self.assets_dir, f"listen_bg{n}.png")
 
-        # 听歌背景：1~6
-        self.listen_bgs = []
-        for i in range(1, 7):
-            p = os.path.join(self.assets_dir, f"listen_bg{i}.png")
-            if os.path.exists(p):
-                self.listen_bgs.append(p)
+        # ✅ 新增开始界面背景
+        self.bg_start_fixed = bg(2)
 
-        # 听歌音频：listen1~6（根目录）
-        self.listen_tracks = []
-        for i in range(1, 7):
-            p = os.path.join(self.root_dir, f"listen{i}.mp3")
-            if os.path.exists(p):
-                self.listen_tracks.append(p)
+        # ✅ 三按钮固定背景
+        self.bg_listen_fixed = bg(1)
+        self.bg_novel_fixed = bg(4)
+        self.bg_love_fixed = bg(7)
 
-        # 爱：listen7
-        self.love_track = _pick_existing([os.path.join(self.root_dir, "listen7.mp3")])
+        # 音频（固定命名）
+        def track(n: int) -> str:
+            return os.path.join(self.root_dir, f"listen{n}.mp3")
 
-        # 小说主题曲：listen8
-        self.novel_track = _pick_existing([os.path.join(self.root_dir, "listen8.mp3")])
-
-        # 小说内容（10页）
-        self.novel_pages = self._make_novel_pages_10()
-        self.novel_page_i = 0
+        self.listen_tracks = [track(i) for i in range(1, 7)]
+        self.love_track = track(7)
+        self.novel_track = track(8)
 
         # 状态
-        self.mode = "home"
+        self.mode = "start"   # ✅ 默认进入开始界面
         self.sound = None
         self.listen_index = -1
-        self.bg_index = -1
-        self._sound_cache = {}
+        self._sound_cache: Dict[str, object] = {}
+
+        # 小说按钮触发计数：到 10 次停止
+        self.novel_trigger_count = 0
+        self.novel_trigger_limit = 10
 
         # UI Root
         root = FloatLayout()
@@ -196,192 +162,215 @@ class ProtonApp(App):
         )
         root.add_widget(self.bg)
 
-        # 背景暗化遮罩 + 轻微暗角（提升“成片感”）
-        with root.canvas.after:
-            # 全屏暗化
-            self._mask_color = Color(0, 0, 0, 0.28)
-            self._mask_rect = Rectangle(pos=root.pos, size=root.size)
-        root.bind(size=self._sync_mask, pos=self._sync_mask)
-
         # 雪花层（背景之上）
-        self.snow = SnowLayer(count=28, size_hint=(1, 1), pos_hint={"x": 0, "y": 0})
+        self.snow = SnowLayer(count=32, size_hint=(1, 1), pos_hint={"x": 0, "y": 0})
         root.add_widget(self.snow)
 
-        # 顶部文案（两行，居中，轻“陪伴感”）
-        self.title = Label(
-            text="你好，静静\n我是质子 1 号。褚少华派我来陪你。",
+        # 顶部大标题（不动）
+        self.top_label = Label(
+            text="🎄❄️ 我是质子 1 号：圣诞快乐，静静。❄️🎄",
             size_hint=(1, None),
-            height=140,
-            pos_hint={"center_x": 0.5, "top": 0.96},
-            font_size=26,
+            height=120,
+            pos_hint={"center_x": 0.5, "top": 1},
+            font_size=28,
+            bold=True,
             font_name=self.font if self.font else None,
-            halign="center",
-            valign="middle",
-            color=(1, 1, 1, 0.96),
+            color=(1, 1, 1, 0.98),
         )
-        self.title.bind(size=self.title.setter("text_size"))
-        root.add_widget(self.title)
+        root.add_widget(self.top_label)
 
-        # 顶部状态（小字，不抢）
-        self.status = Label(
-            text="",
-            size_hint=(1, None),
-            height=40,
-            pos_hint={"center_x": 0.5, "top": 0.77},
-            font_size=18,
-            font_name=self.font if self.font else None,
-            halign="center",
-            valign="middle",
-            color=(1, 1, 1, 0.80),
-        )
-        self.status.bind(size=self.status.setter("text_size"))
-        root.add_widget(self.status)
-
-        # 底部卡片容器（UI 成品感核心）
-        self.card = BoxLayout(
-            orientation="vertical",
-            spacing=16,
-            padding=[20, 20, 20, 20],
-            size_hint=(0.90, None),
-            height=290,
-            pos_hint={"center_x": 0.5, "y": 0.08},
-        )
-        with self.card.canvas.before:
-            # 半透明玻璃卡片
-            self._card_color = Color(1, 1, 1, 0.16)
-            self._card_rect = RoundedRectangle(pos=self.card.pos, size=self.card.size, radius=[28])
-            # 金色细边
-            self._card_line_color = Color(0.95, 0.84, 0.35, 0.55)
-            self._card_line = Line(rounded_rectangle=[self.card.x, self.card.y, self.card.width, self.card.height, 28], width=1.2)
-        self.card.bind(pos=self._sync_card, size=self._sync_card)
-        root.add_widget(self.card)
-
-        # 三按钮（统一风格 + 按下动效）
-        self.btn_listen = self._make_premium_button("🎵  和褚少华一起听歌")
-        self.btn_novel = self._make_premium_button("📖  和褚少华一起看小说")
-        self.btn_love = self._make_premium_button("❤️  我爱褚少华")
-
-        self.btn_listen.bind(on_press=self.on_listen_press)
-        self.btn_novel.bind(on_press=self.on_novel_press)
-        self.btn_love.bind(on_press=self.on_love_press)
-
-        self.card.add_widget(self.btn_listen)
-        self.card.add_widget(self.btn_novel)
-        self.card.add_widget(self.btn_love)
-
-        # 小说区（覆盖在中部）
+        # 内容区（用于开始界面按钮 / 小说大金字）
         self.content_area = FloatLayout(size_hint=(1, 1))
         root.add_widget(self.content_area)
 
-        self.novel_scroll = ScrollView(
-            size_hint=(0.92, 0.55),
-            pos_hint={"center_x": 0.5, "center_y": 0.55},
+        # ----------------- 开始界面：圆形“进入”按钮 -----------------
+        self.enter_btn = Button(
+            text="进入",
+            font_size=36,
+            font_name=self.font if self.font else None,
+            size_hint=(None, None),
+            background_normal="",
+            background_color=(0, 0, 0, 0),
+            color=(1, 1, 1, 1),
         )
+        self.enter_btn.bind(on_press=self.on_enter_press)
+
+        # 圆形样式（红底金边，跟主按钮一致风格，但做圆）
+        self.enter_btn._col_up = (0.62, 0.12, 0.12, 0.92)
+        self.enter_btn._col_down = (0.40, 0.08, 0.08, 0.96)
+        self.enter_btn._stroke_col = (0.96, 0.82, 0.28, 0.95)
+
+        with self.enter_btn.canvas.before:
+            self.enter_btn._bg_color = Color(*self.enter_btn._col_up)
+            self.enter_btn._bg_rect = RoundedRectangle(pos=self.enter_btn.pos, size=self.enter_btn.size, radius=[999])
+            self.enter_btn._line_color = Color(*self.enter_btn._stroke_col)
+            self.enter_btn._line = Line(rounded_rectangle=[0, 0, 0, 0, 999], width=2.2)
+
+        def _sync_enter(*_):
+            # 尺寸：屏幕高度的 1/6，保持圆形
+            d = max(120, int(Window.height / 6))
+            self.enter_btn.size = (d, d)
+            self.enter_btn.pos = (Window.width * 0.5 - d * 0.5, Window.height * 0.52 - d * 0.5)
+
+            self.enter_btn._bg_rect.pos = self.enter_btn.pos
+            self.enter_btn._bg_rect.size = self.enter_btn.size
+            self.enter_btn._bg_rect.radius = [d / 2]
+
+            self.enter_btn._line.rounded_rectangle = [
+                self.enter_btn.x, self.enter_btn.y, self.enter_btn.width, self.enter_btn.height, d / 2
+            ]
+
+        self.enter_btn.bind(pos=_sync_enter, size=_sync_enter)
+
+        def _down_enter(*_):
+            self.enter_btn._bg_color.rgba = self.enter_btn._col_down
+
+        def _up_enter(*_):
+            self.enter_btn._bg_color.rgba = self.enter_btn._col_up
+
+        self.enter_btn.bind(on_press=_down_enter, on_release=_up_enter)
+
+        # ----------------- 主界面：3 按钮区（不动） -----------------
+        self.btn_box = BoxLayout(
+            orientation="vertical",
+            spacing=18,
+            padding=[0, 0, 0, 0],
+            size_hint=(0.88, None),
+            height=max(340, int(Window.height * 0.42)),
+            pos_hint={"center_x": 0.5, "center_y": 0.30},
+        )
+
+        self.btn_listen = self._make_round_button("和褚少华一起听歌", font_size=28, height=112)
+        self.btn_listen.bind(on_press=self.on_listen_press)
+
+        self.btn_novel = self._make_round_button("和褚少华一起看小说", font_size=28, height=112)
+        self.btn_novel.bind(on_press=self.on_novel_press)
+
+        self.btn_love = self._make_round_button("我爱褚少华", font_size=28, height=112)
+        self.btn_love.bind(on_press=self.on_love_press)
+
+        self.btn_box.add_widget(self.btn_listen)
+        self.btn_box.add_widget(self.btn_novel)
+        self.btn_box.add_widget(self.btn_love)
+
+        # ----------------- 小说输出：大金字 -----------------
+        self.novel_scroll = ScrollView(
+            size_hint=(0.92, 0.66),
+            pos_hint={"center_x": 0.5, "center_y": 0.60},
+        )
+
         self.novel_label = Label(
             text="",
             size_hint_y=None,
             text_size=(Window.width * 0.86, None),
-            font_size=24,
-            halign="left",
-            valign="top",
+            font_size=40,                # ✅ 大字
+            halign="center",
+            valign="middle",
             font_name=self.font if self.font else None,
-            color=(0.98, 0.90, 0.70, 1),  # 暖金色（比纯红高级）
+            color=(0.98, 0.86, 0.25, 1), # ✅ 金色
         )
         self.novel_label.bind(texture_size=self._update_novel_label_height)
         self.novel_scroll.add_widget(self.novel_label)
+
         Window.bind(size=self._on_window_resize)
 
-        # 启动：首页不播放
-        self._show_home()
+ # ✅ 默认展示开始界面（不自动播放）
+        self._show_start()
 
-        # 雪花开启
+        # ✅ 雪花开启
         self.snow.start()
+
+        # ✅ 计算一次进入按钮位置
+        _sync_enter()
 
         return root
 
-    # ---------------- UI sync ----------------
-    def _sync_mask(self, instance, *_):
-        self._mask_rect.pos = instance.pos
-        self._mask_rect.size = instance.size
-
-    def _sync_card(self, *_):
-        self._card_rect.pos = self.card.pos
-        self._card_rect.size = self.card.size
-        self._card_rect.radius = [28]
-        self._card_line.rounded_rectangle = [self.card.x, self.card.y, self.card.width, self.card.height, 28]
-
+    # ----------------- UI -----------------
     def _on_window_resize(self, *_):
+        self.btn_box.height = max(340, int(Window.height * 0.42))
         self.novel_label.text_size = (Window.width * 0.86, None)
-        # 卡片高度自适配一点
-        self.card.height = 290 if Window.height >= 720 else 260
 
-    def _update_novel_label_height(self, *_):
-        self.novel_label.height = self.novel_label.texture_size[1] + 24
+        # 同步进入按钮（防旋转/尺寸变化后错位）
+        d = max(120, int(Window.height / 6))
+        self.enter_btn.size = (d, d)
+        self.enter_btn.pos = (Window.width * 0.5 - d * 0.5, Window.height * 0.52 - d * 0.5)
+        self.enter_btn._bg_rect.pos = self.enter_btn.pos
+        self.enter_btn._bg_rect.size = self.enter_btn.size
+        self.enter_btn._bg_rect.radius = [d / 2]
+        self.enter_btn._line.rounded_rectangle = [self.enter_btn.x, self.enter_btn.y, self.enter_btn.width, self.enter_btn.height, d / 2]
 
-    def _set_bg(self, path: str):
-        if path and os.path.exists(path):
-            self.bg.source = path
-            self.bg.reload()
-
-    def _clear_content(self):
-        self.content_area.clear_widgets()
-
-    # ---------------- Premium Button ----------------
-    def _make_premium_button(self, text: str) -> Button:
+    def _make_round_button(self, text: str, font_size=26, height=96) -> Button:
         btn = Button(
             text=text,
-            font_size=22,
+            font_size=font_size,
             font_name=self.font if self.font else None,
             size_hint=(1, None),
-            height=74,
+            height=height,
             background_normal="",
             background_color=(0, 0, 0, 0),
-            color=(1, 1, 1, 0.98),
+            color=(1, 1, 1, 1),
         )
 
-        # 深红渐“质感” + 金边（比你现在纯红更高级）
-        btn._col_up = (0.55, 0.14, 0.14, 0.85)
-        btn._col_down = (0.40, 0.10, 0.10, 0.92)
-        btn._stroke_col = (0.95, 0.84, 0.35, 0.90)
+        btn._col_up = (0.62, 0.12, 0.12, 0.92)
+        btn._col_down = (0.40, 0.08, 0.08, 0.96)
+        btn._stroke_col = (0.96, 0.82, 0.28, 0.95)
 
         with btn.canvas.before:
             btn._bg_color = Color(*btn._col_up)
-            btn._bg_rect = RoundedRectangle(pos=btn.pos, size=btn.size, radius=[20])
+            btn._bg_rect = RoundedRectangle(pos=btn.pos, size=btn.size, radius=[btn.height / 2])
             btn._line_color = Color(*btn._stroke_col)
-            btn._line = Line(rounded_rectangle=[btn.x, btn.y, btn.width, btn.height, 20], width=1.8)
+            btn._line = Line(rounded_rectangle=[btn.x, btn.y, btn.width, btn.height, btn.height / 2], width=2.0)
 
         def _sync(*_):
             btn._bg_rect.pos = btn.pos
             btn._bg_rect.size = btn.size
-            btn._bg_rect.radius = [20]
-            btn._line.rounded_rectangle = [btn.x, btn.y, btn.width, btn.height, 20]
+            btn._bg_rect.radius = [btn.height / 2]
+            btn._line.rounded_rectangle = [btn.x, btn.y, btn.width, btn.height, btn.height / 2]
 
         btn.bind(pos=_sync, size=_sync)
 
-        # 按下动效：轻缩放 + 颜色加深（成品感关键）
         def _down(*_):
             btn._bg_color.rgba = btn._col_down
-            # 记录原始
-            btn._orig_h = btn.height
-            btn._orig_y = btn.y
-            anim = Animation(height=btn._orig_h - 6, y=btn._orig_y + 3, d=0.06)
-            anim.start(btn)
 
         def _up(*_):
             btn._bg_color.rgba = btn._col_up
-            # 回弹
-            try:
-                oh = getattr(btn, "_orig_h", btn.height)
-                oy = getattr(btn, "_orig_y", btn.y)
-            except Exception:
-                oh, oy = btn.height, btn.y
-            anim = Animation(height=oh, y=oy, d=0.08)
-            anim.start(btn)
 
         btn.bind(on_press=_down, on_release=_up)
         return btn
 
-    # ---------------- Audio ----------------
+    def _update_novel_label_height(self, *_):
+        self.novel_label.height = self.novel_label.texture_size[1] + 40
+
+    def _clear_content(self):
+        self.content_area.clear_widgets()
+
+    def _fallback_bg(self) -> str:
+        p = os.path.join(self.assets_dir, "listen_bg1.png")
+        if os.path.exists(p):
+            return p
+        icon = os.path.join(self.root_dir, "icon.png")
+        if os.path.exists(icon):
+            return icon
+        return ""
+
+    def _set_bg(self, path: str):
+        try:
+            if path and os.path.exists(path):
+                self.bg.source = path
+                self.bg.reload()
+                return
+        except Exception:
+            pass
+
+        fb = self._fallback_bg()
+        if fb and os.path.exists(fb):
+            self.bg.source = fb
+            try:
+                self.bg.reload()
+            except Exception:
+                pass
+
+    # ----------------- 音频 -----------------
     def _stop_sound(self):
         try:
             if self.sound:
@@ -394,113 +383,144 @@ class ProtonApp(App):
         s = self._sound_cache.get(path)
         if s:
             return s
-        s = SoundLoader.load(path)
+        try:
+            s = SoundLoader.load(path)
+        except Exception:
+            s = None
         if s:
             self._sound_cache[path] = s
         return s
 
     def _play_sound(self, path: str, loop: bool = False):
+        # 每次都 stop + seek(0) + play（保证“重新播放”）
         self._stop_sound()
+
         if not path or not os.path.exists(path):
-            self.status.text = f"找不到音频：{os.path.basename(path) if path else '空路径'}"
+            self.top_label.text = f"⚠️ 找不到音频：{os.path.basename(path) if path else '空路径'}"
             return
+
         s = self._get_sound_cached(path)
         if not s:
-            self.status.text = f"无法加载音频：{os.path.basename(path)}"
+            self.top_label.text = f"⚠️ 无法加载音频：{os.path.basename(path)}"
             return
+
         self.sound = s
-        self.sound.loop = loop
+        try:
+            self.sound.loop = loop
+        except Exception:
+            pass
+
         try:
             if hasattr(self.sound, "seek"):
                 self.sound.seek(0)
         except Exception:
             pass
-        self.sound.play()
 
-    # ---------------- Novel ----------------
-    def _make_novel_pages_10(self):
-        pages = []
-        pages.append("打开微信找到褚少华对话聊天框输入：我爱你❤️  解锁新剧情…")
-        for _ in range(9):
-            pages.append("我爱徐林静❤️")
-        return pages
+        try:
+            self.sound.play()
+        except Exception:
+            self.top_label.text = f"⚠️ 播放失败：{os.path.basename(path)}"
+            self.sound = None
 
-    def _render_novel_page(self):
-        total = len(self.novel_pages)
-        i = self.novel_page_i % total
-        self.novel_label.text = f"🎄 第 {i+1}/{total} 页\n\n{self.novel_pages[i]}"
-
-    # ---------------- Modes ----------------
-    def _fallback_bg(self):
-        p = os.path.join(self.assets_dir, "listen_bg1.png")
-        if os.path.exists(p):
-            return p
-        icon = os.path.join(self.root_dir, "icon.png")
-        if os.path.exists(icon):
-            return icon
-        return ""
-
-    def _show_home(self):
-        self.mode = "home"
+    # ----------------- 界面：开始 / 主界面 -----------------
+    def _show_start(self):
+        self.mode = "start"
+        self._stop_sound()
         self._clear_content()
-        self._set_bg(self._fallback_bg())
-        self.status.text = "❄️ 选择一个入口（不会自动播放）"
+        self._set_bg(self.bg_start_fixed)
 
-    def _show_novel(self):
+        # 开始界面只显示“进入”按钮
+        self.content_area.add_widget(self.enter_btn)
+
+        # 主界面三按钮不显示（确保不会叠在一起）
+        if self.btn_box.parent:
+            self.btn_box.parent.remove_widget(self.btn_box)
+
+        self.top_label.text = "🎄 点击进入"
+
+    def _show_main(self):
+        self.mode = "home"
+        self._stop_sound()
+        self._clear_content()
+        # 进入主界面时先用 bg1 兜底（你听歌按钮也固定 bg1）
+        self._set_bg(self._fallback_bg())
+
+        # 移除开始按钮（如果还在）
+        if self.enter_btn.parent:
+            self.enter_btn.parent.remove_widget(self.enter_btn)
+
+        # 显示三按钮
+        if not self.btn_box.parent:
+            # btn_box 是 build() 时创建的，直接加回根容器：content_area 上层已经有，不能用
+            # 这里用 App 的 root（FloatLayout）上的 children 关系：我们把 btn_box 加到 root（self.root）
+            self.root.add_widget(self.btn_box)
+
+        self.top_label.text = "🎄❄️ 我是质子 1 号：圣诞快乐，静静。❄️🎄"
+
+    # ----------------- 事件：开始界面“进入” -----------------
+    def on_enter_press(self, *_):
+        self._show_main()
+
+    # ----------------- 三按钮逻辑（按你要求） -----------------
+    def on_listen_press(self, *_):
+        # 固定背景：listen_bg1
+        self.mode = "listen"
+        self._clear_content()  # 保证不会残留大字
+        self._set_bg(self.bg_listen_fixed)
+
+        existing = [p for p in self.listen_tracks if os.path.exists(p)]
+        if not existing:
+            self.top_label.text = "⚠️ 缺少 listen1~listen6.mp3（根目录）"
+            return
+
+        self.listen_index = (self.listen_index + 1) % len(existing)
+        track = existing[self.listen_index]
+
+        self._play_sound(track, loop=False)
+        self.top_label.text = f"❄️🎵 听歌：{os.path.basename(track)}（背景固定 listen_bg1）"
+
+    def on_novel_press(self, *_):
+        # 触发 10 次后停止
+        if self.novel_trigger_count >= self.novel_trigger_limit:
+            self.top_label.text = "🎄 已触发 10 次：小说按钮停止"
+            return
+
+        self.novel_trigger_count += 1
         self.mode = "novel"
         self._clear_content()
-        self._set_bg(self.bg_novel if os.path.exists(self.bg_novel) else self._fallback_bg())
+
+        # 固定背景：listen_bg4
+        self._set_bg(self.bg_novel_fixed)
+
+        # 只输出一句话：大金字
+        self.novel_label.text = "跟褚少华说我爱你解锁新剧情！"
         self.content_area.add_widget(self.novel_scroll)
-        self._render_novel_page()
 
-        # 进入小说才循环播放 listen8
-        if self.novel_track:
+        # 背景音乐：listen8 循环
+        if os.path.exists(self.novel_track):
             self._play_sound(self.novel_track, loop=True)
-            self.status.text = "🎄 小说模式：再按一次翻页"
         else:
-            self.status.text = "缺少 listen8.mp3（根目录）"
-
-    # ---------------- Buttons ----------------
-    def on_listen_press(self, *_):
-        if not self.listen_tracks:
-            self.status.text = "缺少 listen1~listen6.mp3（根目录）"
-            return
-        if not self.listen_bgs:
-            self.status.text = "缺少 assets/listen_bg1~listen_bg6.png"
+            self.top_label.text = "⚠️ 缺少 listen8.mp3（根目录）"
             return
 
-        self.mode = "listen"
-        self._clear_content()
-
-        self.listen_index = (self.listen_index + 1) % len(self.listen_tracks)
-        self.bg_index = (self.bg_index + 1) % len(self.listen_bgs)
-
-        track = self.listen_tracks[self.listen_index]
-        bg = self.listen_bgs[self.bg_index]
-
-        self._set_bg(bg)
-        self._play_sound(track, loop=False)
-        self.status.text = f"🎵 听歌：{os.path.basename(track)}"
+        left = self.novel_trigger_limit - self.novel_trigger_count
+        if left > 0:
+            self.top_label.text = f"🎄 小说触发 {self.novel_trigger_count}/10（剩余 {left} 次）"
+        else:
+            self.top_label.text = "🎄 已触发 10 次：下次按将停止"
 
     def on_love_press(self, *_):
         self.mode = "love"
         self._clear_content()
+        self._set_bg(self.bg_love_fixed)
 
-        self._set_bg(self.bg_love if os.path.exists(self.bg_love) else self._fallback_bg())
-        if not self.love_track:
-            self.status.text = "缺少 listen7.mp3（根目录）"
+        if not os.path.exists(self.love_track):
+            self.top_label.text = "⚠️ 缺少 listen7.mp3（根目录）"
             return
 
+        # 每次按下都从头播
         self._play_sound(self.love_track, loop=False)
-        self.status.text = "❤️ 我爱褚少华"
-
-    def on_novel_press(self, *_):
-        if self.mode != "novel":
-            self.novel_page_i = 0
-            self._show_novel()
-        else:
-            self.novel_page_i += 1
-            self._render_novel_page()
+        self.top_label.text = "🎄❤️ 我爱褚少华（listen7 每次重播｜背景固定 listen_bg7）"
 
 
 if __name__ == "__main__":
