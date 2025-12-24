@@ -1,5 +1,5 @@
 [app]
-title = 静静
+title = 麒宝儿
 package.name = snakegame
 package.domain = org.example
 
